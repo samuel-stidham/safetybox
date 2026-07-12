@@ -79,7 +79,7 @@ func runInit(cobraCmd *cobra.Command, opts *options) error {
 		// so remove them rather than wedge a re-run on ErrExists.
 		_ = os.Remove(identityPath)
 
-		removeVaultFiles(vaultPath)
+		vault.RemoveFiles(vaultPath)
 
 		return fmt.Errorf("self-test: %w", err)
 	}
@@ -87,14 +87,6 @@ func runInit(cobraCmd *cobra.Command, opts *options) error {
 	printInitSuccess(cobraCmd, identityPath, vaultPath, key.Recipient().String())
 
 	return nil
-}
-
-// removeVaultFiles deletes a vault and its WAL siblings, best effort,
-// to unwind a vault created earlier in the same invocation.
-func removeVaultFiles(vaultPath string) {
-	_ = os.Remove(vaultPath)
-	_ = os.Remove(vaultPath + "-wal")
-	_ = os.Remove(vaultPath + "-shm")
 }
 
 // selfTest seals and opens one throwaway value through the full

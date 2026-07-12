@@ -63,7 +63,7 @@ func Create(path, recipient string) error {
 
 	handle, err := openHandle(path)
 	if err != nil {
-		removeBestEffort(path)
+		RemoveFiles(path)
 
 		return err
 	}
@@ -71,7 +71,7 @@ func Create(path, recipient string) error {
 	if err := initSchema(handle, recipient); err != nil {
 		_ = handle.Close()
 
-		removeBestEffort(path)
+		RemoveFiles(path)
 
 		return err
 	}
@@ -172,6 +172,14 @@ func openHandle(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
+	// One connection per vault. This is a single-user CLI, so nothing
+	// is lost to serialization, and it guarantees the post-purge and
+	// post-rekey wal_checkpoint(TRUNCATE) runs on the only connection,
+	// with no other pooled connection pinning a WAL frame it cannot
+	// then reclaim. That is what makes the secure-delete scrub of the
+	// write-ahead log reliable rather than best effort.
+	handle.SetMaxOpenConns(1)
+
 	if err := handle.PingContext(context.Background()); err != nil {
 		_ = handle.Close()
 
@@ -216,9 +224,12 @@ func initSchema(handle *sql.DB, recipient string) error {
 	return nil
 }
 
-// removeBestEffort cleans up a half-created vault file so a retry
-// does not hit ErrVaultExists.
-func removeBestEffort(path string) {
+// RemoveFiles deletes a vault database and its WAL siblings, best
+// effort. It is for unwinding a vault created earlier in the same
+// invocation, such as after a failed self-test, so a retry does not
+// hit ErrVaultExists. It does not distinguish a live vault from a
+// half-created one; the caller owns that judgement.
+func RemoveFiles(path string) {
 	_ = os.Remove(path)
 	_ = os.Remove(path + "-wal")
 	_ = os.Remove(path + "-shm")

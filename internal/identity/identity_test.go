@@ -72,7 +72,7 @@ func TestLoadRefusesLooseDirectory(t *testing.T) {
 	require.NoError(t, identity.Write(path, newKey(t), []byte(fakePassphrase)))
 
 	// Loosen the containing directory after a correct write.
-	require.NoError(t, os.Chmod(filepath.Dir(path), 0o755)) //nolint:gosec // deliberately loose to test refusal
+	require.NoError(t, os.Chmod(filepath.Dir(path), 0o755))
 
 	_, _, err := identity.Load(path, []byte(fakePassphrase))
 	require.ErrorIs(t, err, identity.ErrUnsafeDirPermissions, "a group/world-accessible directory must be refused")
@@ -80,7 +80,7 @@ func TestLoadRefusesLooseDirectory(t *testing.T) {
 
 func TestWriteRefusesLooseDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "config")
-	require.NoError(t, os.MkdirAll(dir, 0o755)) //nolint:gosec // deliberately loose to test refusal
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 
 	err := identity.Write(filepath.Join(dir, "identity.age"), newKey(t), []byte(fakePassphrase))
 	require.ErrorIs(t, err, identity.ErrUnsafeDirPermissions, "a loose pre-existing directory must be refused")

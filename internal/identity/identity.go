@@ -212,9 +212,7 @@ func Replace(path string, key *age.X25519Identity, passphrase []byte) error {
 // syncDir flushes a directory's metadata so a rename inside it
 // survives a crash.
 func syncDir(dir string) error {
-	// dir is the identity file's own directory, derived from the
-	// resolved identity path, not external input. Opened only to fsync.
-	handle, err := os.Open(dir) //nolint:gosec // trusted internal directory path, opened for fsync only
+	handle, err := os.Open(filepath.Clean(dir))
 	if err != nil {
 		return fmt.Errorf("open identity directory %s: %w", dir, err)
 	}

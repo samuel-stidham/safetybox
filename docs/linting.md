@@ -45,11 +45,14 @@ and re-adding it tomorrow is churn.
 **varnamelen.** Short names like `tt` and `tx` are idiomatic inside
 tests and their scope is a few lines.
 
-**gosec, rule G304 only.** G304 flags file paths built from
-variables. Every test builds paths from `t.TempDir()`, which the
-test itself controls. All other gosec rules still apply to tests,
-including G101, which keeps real-looking credentials out of
-fixtures.
+**gosec, rules G301, G302, and G304 only.** G304 flags file paths
+built from variables, and every test builds paths from `t.TempDir()`,
+which the test itself controls. G301 and G302 flag loose directory and
+file permissions, and the permission tests deliberately create 0755
+directories and 0644 files to prove the ssh-style checks refuse them,
+so the finding is the point of the test. All other gosec rules still
+apply to tests, including G101, which keeps real-looking credentials
+out of fixtures.
 
 ## Inline suppressions in production code
 
@@ -59,6 +62,16 @@ There is exactly one, and this list must stay short.
 reaching a subprocess. The exec verb exists to run the user's own
 command line with secrets in the environment. The input is the
 operator's own argv, so no sanitization could keep the verb useful.
+
+## Inline suppressions in test code
+
+**cmd/review_fixes_internal_test.go, gosec G204.** The shell
+round-trip test sources the reveal verb's own emitted assignments in a
+real `sh` and `fish` to prove the quoting is injection-safe. Spawning
+the shell is the test, so the finding cannot be designed away.
+G204 stays inline rather than excluded for all test files, because a
+future test that spawns a subprocess with genuinely tainted input
+should still be flagged.
 
 ## Adding an exclusion
 

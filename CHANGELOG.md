@@ -30,7 +30,9 @@ versions follow [Semantic Versioning](https://semver.org/).
 - `purge` and `rekey` now actually destroy old ciphertext. The vault
   enables SQLite `secure_delete` and checkpoints the write-ahead log
   after each, so erased envelopes and pre-rotation envelopes no
-  longer linger in free pages or WAL frames.
+  longer linger in free pages or WAL frames. The vault holds a single
+  connection, so the checkpoint always truncates the log rather than
+  being blocked by another pooled connection.
 - The redaction wall is now total. `secret.Value` implements
   `fmt.Formatter` so numeric verbs like `%d` redact, and holds its
   bytes behind a pointer so a Value in another struct's unexported

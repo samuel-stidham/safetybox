@@ -37,8 +37,11 @@ Names are hierarchical. Segments of letters, digits, dots,
 underscores, and dashes, joined by single slashes. `api/stripe/live`
 is valid. Leading slashes, trailing slashes, and spaces are not.
 
-`--env-name` records the environment variable exec will use.
-`--expires` takes RFC3339 or YYYY-MM-DD, where a bare date means
+`--env-name` records the environment variable exec will use. It must
+be a valid shell identifier, letters, digits, and underscores, not
+starting with a digit, so exec and `reveal --format` can emit it as a
+variable name. `--expires` takes RFC3339 or YYYY-MM-DD, where a bare
+date means
 midnight UTC. Both attributes stick until a later set changes them.
 `--revoke-previous` disables all older enabled versions in the same
 transaction. Without it, prior versions stay enabled so rotation has
@@ -87,10 +90,13 @@ One name prints one JSON object, unchanged from earlier releases.
 Several names, `--env`, or `--prefix` select a batch. The whole batch
 decrypts with one passphrase read and one identity unlock, which is
 the point. `--env` selects every secret that has an env name.
-`--prefix` selects every secret under a name prefix. The two filters
-compose, and filters cannot be mixed with explicit names. Batch JSON
-output is an array. An explicit name that does not resolve fails the
-whole batch. A filter that matches nothing prints an empty array.
+`--prefix` selects every secret under a name prefix. The prefix
+matches exactly and is case-sensitive: it is a literal leading
+substring, not a pattern, so `_` and `%` in a name are ordinary
+characters and never wildcards. The two filters compose, and filters
+cannot be mixed with explicit names. Batch JSON output is an array. An
+explicit name that does not resolve fails the whole batch. A filter
+that matches nothing prints an empty array.
 
 `--format sh` and `--format fish` emit assignment lines ready to
 source into a shell session, using the env name recorded by set.
@@ -141,9 +147,10 @@ safetybox list [prefix]
 ```
 
 Lists every non-deleted secret, or only those under a name prefix.
-Names are plaintext columns in the current format, so list needs no
-identity. Output is a JSON array of metadata summaries with the
-latest version number.
+The prefix matches exactly and is case-sensitive, the same literal
+leading-substring rule reveal uses. Names are plaintext columns in the
+current format, so list needs no identity. Output is a JSON array of
+metadata summaries with the latest version number.
 
 ## stale
 

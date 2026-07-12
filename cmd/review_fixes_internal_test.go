@@ -90,7 +90,7 @@ func TestPassphraseFileRefusesLoosePerms(t *testing.T) {
 	fixture := newCLIFixture(t)
 	fixture.runOK(fakeValueOne+"\n", "set", "api/one")
 
-	require.NoError(t, os.Chmod(fixture.passphraseFile, 0o644)) //nolint:gosec // deliberately loose to test refusal
+	require.NoError(t, os.Chmod(fixture.passphraseFile, 0o644))
 
 	_, _, err := fixture.run("", "reveal", "api/one")
 	require.ErrorContains(t, err, "chmod 600")
