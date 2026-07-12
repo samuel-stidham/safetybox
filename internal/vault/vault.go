@@ -154,7 +154,18 @@ func (v *Vault) metaValue(key string) (string, error) {
 }
 
 func openHandle(path string) (*sql.DB, error) {
-	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
+	// secure_delete(1) makes SQLite overwrite freed content with zeros
+	// instead of leaving it in freelist pages, so purge and rekey
+	// actually destroy old envelope bytes. _txlock=immediate starts
+	// write transactions with a write lock up front, avoiding the
+	// SQLITE_BUSY_SNAPSHOT a deferred read-then-write hits under
+	// concurrency.
+	dsn := "file:" + path +
+		"?_txlock=immediate" +
+		"&_pragma=journal_mode(WAL)" +
+		"&_pragma=foreign_keys(1)" +
+		"&_pragma=secure_delete(1)" +
+		"&_pragma=busy_timeout(5000)"
 
 	handle, err := sql.Open("sqlite", dsn)
 	if err != nil {

@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -47,13 +49,15 @@ func TestQuoteFish(t *testing.T) {
 	}
 }
 
-func TestIsShellIdentifier(t *testing.T) {
-	assert.True(t, isShellIdentifier("STRIPE_KEY"))
-	assert.True(t, isShellIdentifier("_private2"))
-	assert.False(t, isShellIdentifier("2LEADING"))
-	assert.False(t, isShellIdentifier("BAD-DASH"))
-	assert.False(t, isShellIdentifier("SPACE D"))
-	assert.False(t, isShellIdentifier(""))
+func TestShellIdentifierGrammar(t *testing.T) {
+	grammar := shellIdentifierGrammar()
+
+	assert.True(t, grammar.MatchString("STRIPE_KEY"))
+	assert.True(t, grammar.MatchString("_private2"))
+	assert.False(t, grammar.MatchString("2LEADING"))
+	assert.False(t, grammar.MatchString("BAD-DASH"))
+	assert.False(t, grammar.MatchString("SPACE D"))
+	assert.False(t, grammar.MatchString(""))
 }
 
 func TestRevealMultipleNamesReturnsArray(t *testing.T) {
@@ -152,6 +156,19 @@ func TestRevealBatchJSONIncludesEnvName(t *testing.T) {
 
 func TestRevealEmptyFilterMatchIsEmptyArray(t *testing.T) {
 	fixture := newCLIFixture(t)
+
+	stdout, _ := fixture.runOK("", "reveal", "--prefix", "nothing/here")
+	assert.Equal(t, "[]", strings.TrimSpace(stdout))
+}
+
+func TestRevealEmptyMatchNeverUnlocksIdentity(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	// A wrong passphrase fails any identity unlock, so success here
+	// proves an empty match never touches the identity at all.
+	wrongPassphraseFile := filepath.Join(t.TempDir(), "wrong")
+	require.NoError(t, os.WriteFile(wrongPassphraseFile, []byte("fake-wrong-passphrase\n"), 0o600))
+	fixture.passphraseFile = wrongPassphraseFile
 
 	stdout, _ := fixture.runOK("", "reveal", "--prefix", "nothing/here")
 	assert.Equal(t, "[]", strings.TrimSpace(stdout))

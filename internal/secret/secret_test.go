@@ -35,6 +35,68 @@ func fmtRenderings() []leakRendering {
 				return fmt.Sprintf("%v", struct{ Value secret.Value }{Value: value})
 			},
 		},
+		{
+			name:   "fmt %d numeric verb",
+			render: func(_ *testing.T, value secret.Value) string { return fmt.Sprintf("%d", value) },
+		},
+		{
+			name:   "fmt %c numeric verb",
+			render: func(_ *testing.T, value secret.Value) string { return fmt.Sprintf("%c", value) },
+		},
+		{
+			name:   "fmt %x hex verb",
+			render: func(_ *testing.T, value secret.Value) string { return fmt.Sprintf("%x", value) },
+		},
+		{
+			name:   "fmt %d on pointer",
+			render: func(_ *testing.T, value secret.Value) string { return fmt.Sprintf("%d", &value) },
+		},
+	}
+}
+
+// unexportedFieldRenderings cover the path fmt reflection takes when a
+// Value sits in another struct's unexported field, where fmt cannot
+// dispatch Format. These must not leak plaintext, though they render
+// the pointer rather than the redaction marker, so they are asserted
+// separately from the marker-bearing renderings.
+func unexportedFieldRenderings() []leakRendering {
+	type holder struct{ value secret.Value }
+
+	return []leakRendering{
+		{
+			name: "fmt %v on unexported field",
+			render: func(_ *testing.T, value secret.Value) string {
+				return fmt.Sprintf("%v", holder{value: value})
+			},
+		},
+		{
+			name: "fmt %+v on unexported field",
+			render: func(_ *testing.T, value secret.Value) string {
+				return fmt.Sprintf("%+v", holder{value: value})
+			},
+		},
+		{
+			name: "fmt %#v on unexported field",
+			render: func(_ *testing.T, value secret.Value) string {
+				return fmt.Sprintf("%#v", holder{value: value})
+			},
+		},
+		{
+			name: "fmt %d on unexported field",
+			render: func(_ *testing.T, value secret.Value) string {
+				return fmt.Sprintf("%d", holder{value: value})
+			},
+		},
+		{
+			name: "slog with unexported field struct",
+			render: func(_ *testing.T, value secret.Value) string {
+				var buf bytes.Buffer
+
+				slog.New(slog.NewTextHandler(&buf, nil)).Warn("cfg", "cfg", holder{value: value})
+
+				return buf.String()
+			},
+		},
 	}
 }
 
@@ -104,10 +166,40 @@ func TestSecretValueNeverLeaks(t *testing.T) {
 	}
 }
 
+// TestSecretValueUnexportedFieldNeverLeaks covers the fmt-reflection
+// path that method dispatch cannot reach. Plaintext must be absent;
+// the redaction marker is not required because the pointer renders as
+// an address.
+func TestSecretValueUnexportedFieldNeverLeaks(t *testing.T) {
+	value := secret.New([]byte(fakePlaintext))
+
+	for _, tt := range unexportedFieldRenderings() {
+		t.Run(tt.name, func(t *testing.T) {
+			out := tt.render(t, value)
+
+			assert.NotContains(t, out, fakePlaintext, "plaintext leaked through %s", tt.name)
+			// The decimal byte rendering is the other shape a leak
+			// takes, so guard against it explicitly.
+			assert.NotContains(t, out, "102 97 107", "decimal byte leak through %s", tt.name)
+		})
+	}
+}
+
 func TestExposeReturnsPlaintext(t *testing.T) {
 	value := secret.New([]byte(fakePlaintext))
 
 	assert.Equal(t, []byte(fakePlaintext), value.Expose())
+}
+
+// TestExposeAliasesInternalStorage pins the documented contract: the
+// returned slice aliases the Value's storage and copies share it.
+func TestExposeAliasesInternalStorage(t *testing.T) {
+	value := secret.New([]byte(fakePlaintext))
+	copyOfValue := value
+
+	value.Expose()[0] = 'X'
+
+	assert.Equal(t, byte('X'), copyOfValue.Expose()[0], "copies of a Value share one backing array")
 }
 
 func TestMarshalJSONExactOutput(t *testing.T) {

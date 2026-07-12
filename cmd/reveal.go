@@ -104,9 +104,15 @@ func runReveal(cobraCmd *cobra.Command, opts *options, names []string, flags rev
 		return err
 	}
 
-	outputs, err := decryptRevealItems(cobraCmd, opts, items)
-	if err != nil {
-		return err
+	// A filter that matches nothing never touches the identity, so
+	// an empty result costs no passphrase prompt and no KDF.
+	outputs := make([]revealOutput, 0)
+
+	if len(items) > 0 {
+		outputs, err = decryptRevealItems(cobraCmd, opts, items)
+		if err != nil {
+			return err
+		}
 	}
 
 	if flags.format != formatJSON {
@@ -233,6 +239,8 @@ func decryptRevealItems(cobraCmd *cobra.Command, opts *options, items []revealIt
 // carries a usable env name, and warns about the rest on stderr so a
 // sourced batch never silently drops a secret.
 func printShellAssignments(cobraCmd *cobra.Command, outputs []revealOutput, format string) error {
+	grammar := shellIdentifierGrammar()
+
 	for _, output := range outputs {
 		if output.EnvName == nil {
 			printStderr(cobraCmd, fmt.Sprintf("warning: secret %s has no env name, skipped\n", output.Name))
@@ -240,7 +248,7 @@ func printShellAssignments(cobraCmd *cobra.Command, outputs []revealOutput, form
 			continue
 		}
 
-		if !isShellIdentifier(*output.EnvName) {
+		if !grammar.MatchString(*output.EnvName) {
 			printStderr(cobraCmd, fmt.Sprintf(
 				"warning: secret %s env name %q is not a shell identifier, skipped\n",
 				output.Name, *output.EnvName,
@@ -257,13 +265,12 @@ func printShellAssignments(cobraCmd *cobra.Command, outputs []revealOutput, form
 	return nil
 }
 
-// isShellIdentifier reports whether name is safe on the left side of
-// a shell assignment. Anything looser could change the meaning of the
-// emitted line, so it is skipped instead.
-func isShellIdentifier(name string) bool {
-	grammar := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
-	return grammar.MatchString(name)
+// shellIdentifierGrammar matches names safe on the left side of a
+// shell assignment. Anything looser could change the meaning of the
+// emitted line. Compiled per batch, not per secret, because
+// gochecknoglobals rules out a package-level compiled form.
+func shellIdentifierGrammar() *regexp.Regexp {
+	return regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 }
 
 // assignmentLine renders one assignment in the requested dialect.

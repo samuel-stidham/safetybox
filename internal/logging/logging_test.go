@@ -7,10 +7,44 @@ import (
 	"testing"
 
 	"github.com/samuel-stidham/safetybox/internal/logging"
+	"github.com/samuel-stidham/safetybox/internal/secret"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// fakePlaintext is obviously fake test material, never a real secret.
+const fakePlaintext = "fake-log-plaintext-not-real"
+
+// TestSecretValueRedactedThroughHandler logs a real secret.Value
+// under a NON-sensitive key, so it exercises the type's own LogValue
+// rather than the key denylist. Both handlers must redact.
+func TestSecretValueRedactedThroughHandler(t *testing.T) {
+	value := secret.New([]byte(fakePlaintext))
+
+	for _, opts := range []logging.Options{{}, {JSON: true}} {
+		var buf bytes.Buffer
+
+		logging.New(&buf, opts).Warn("probe", "payload", value)
+
+		assert.Contains(t, buf.String(), "[REDACTED]")
+		assert.NotContains(t, buf.String(), fakePlaintext, "LogValue must redact the secret")
+	}
+}
+
+// TestSensitiveKeyBackstopRedactsRawString covers the ReplaceAttr
+// denylist: a raw string logged under a sensitive key is redacted
+// even though a plain string has no LogValue of its own.
+func TestSensitiveKeyBackstopRedactsRawString(t *testing.T) {
+	for _, key := range []string{"passphrase", "value", "plaintext", "identity", "secret"} {
+		var buf bytes.Buffer
+
+		logging.New(&buf, logging.Options{}).Warn("probe", key, fakePlaintext)
+
+		assert.Contains(t, buf.String(), "[REDACTED]", "key %q must be redacted", key)
+		assert.NotContains(t, buf.String(), fakePlaintext, "raw string under %q must not leak", key)
+	}
+}
 
 func TestLevelFiltering(t *testing.T) {
 	tests := []struct {

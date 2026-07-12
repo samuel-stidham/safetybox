@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 
 	"github.com/samuel-stidham/safetybox/internal/envelope"
 	"github.com/samuel-stidham/safetybox/internal/identity"
@@ -52,6 +55,10 @@ func loadIdentity(cobraCmd *cobra.Command, opts *options) (*age.X25519Identity, 
 		return nil, nil, err
 	}
 
+	if err := completeInterruptedRekey(path); err != nil {
+		return nil, nil, err
+	}
+
 	passphrase, err := readPassphrase(cobraCmd, opts.passphraseFile, "Passphrase: ")
 	if err != nil {
 		return nil, nil, err
@@ -65,6 +72,34 @@ func loadIdentity(cobraCmd *cobra.Command, opts *options) (*age.X25519Identity, 
 	}
 
 	return key, cleanup, nil
+}
+
+// completeInterruptedRekey heals the crash window in rekey's identity
+// swap. If the identity file is missing but a staged `.new` sibling
+// exists, a rekey died after moving the old key to `.bak` but before
+// promoting the new one. The vault is already on the new key, so the
+// staged file is the live key and is promoted into place. Any other
+// state is left untouched.
+func completeInterruptedRekey(identityPath string) error {
+	if _, err := os.Stat(identityPath); err == nil {
+		return nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("stat identity %s: %w", identityPath, err)
+	}
+
+	staged := identityPath + ".new"
+
+	if _, err := os.Stat(staged); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("stat staged identity %s: %w", staged, err)
+	}
+
+	if err := os.Rename(staged, identityPath); err != nil {
+		return fmt.Errorf("complete interrupted rekey (your new identity is at %s): %w", staged, err)
+	}
+
+	return nil
 }
 
 // resolved is a decrypted secret with its metadata.

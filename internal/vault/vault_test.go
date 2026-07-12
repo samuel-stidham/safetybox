@@ -53,6 +53,28 @@ func TestCreateSetsRestrictivePermissions(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o700), dirInfo.Mode().Perm(), "vault directory must be 0700")
 }
 
+// TestWALSiblingInheritsPermissions exercises invariant 6's sibling
+// clause: a write creates the -wal file, which must be 0600 like the
+// main database, not left at the process umask default.
+func TestWALSiblingInheritsPermissions(t *testing.T) {
+	path := vaultPath(t)
+
+	require.NoError(t, vault.Create(path, fakeRecipient))
+
+	opened, err := vault.Open(path)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { assert.NoError(t, opened.Close()) })
+
+	// Any write materializes the -wal sibling.
+	_, err = opened.AppendVersion("wal/probe", vault.SetOptions{}, fakeSealer(t))
+	require.NoError(t, err)
+
+	walInfo, err := os.Stat(path + "-wal")
+	require.NoError(t, err, "a write must create the -wal sibling")
+	assert.Equal(t, os.FileMode(0o600), walInfo.Mode().Perm(), "-wal sibling must be 0600")
+}
+
 func TestCreateRefusesExistingVault(t *testing.T) {
 	path := vaultPath(t)
 

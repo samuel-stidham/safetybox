@@ -39,6 +39,12 @@ func runRekey(cobraCmd *cobra.Command, opts *options) error {
 		return err
 	}
 
+	// Heal a prior rekey that crashed mid-swap before doing anything
+	// else, so the load below sees a real identity file.
+	if err := completeInterruptedRekey(identityPath); err != nil {
+		return err
+	}
+
 	passphrase, err := readPassphrase(cobraCmd, opts.passphraseFile, "Passphrase: ")
 	if err != nil {
 		return err
@@ -62,6 +68,11 @@ func runRekey(cobraCmd *cobra.Command, opts *options) error {
 	// transaction, so a crash can never leave re-encrypted envelopes
 	// without their key on disk.
 	stagedPath := identityPath + ".new"
+
+	// The identity loaded cleanly above, so any leftover .new is a
+	// stale staging file from an earlier crash, not a live key.
+	// Remove it or the O_EXCL create below wedges with ErrExists.
+	_ = os.Remove(stagedPath)
 
 	if err := identity.Write(stagedPath, newKey, passphrase); err != nil {
 		return userHint(err)

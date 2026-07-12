@@ -4,7 +4,7 @@ All notable changes to safetybox are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] - 2026-07-12
 
 ### Added
 
@@ -19,6 +19,52 @@ versions follow [Semantic Versioning](https://semver.org/).
   one. The one-object output shape is otherwise unchanged.
 - Command documentation in `doc.go`, so pkg.go.dev renders a full
   overview with the verb table and the security model.
+
+### Security
+
+- `reveal --prefix` and `list`/`stale` now match by exact,
+  case-sensitive prefix. The previous LIKE match treated `_` and `%`
+  in a name as wildcards and folded ASCII case, so a prefix built
+  from a name containing `_` could decrypt and print secrets the
+  caller never selected.
+- `purge` and `rekey` now actually destroy old ciphertext. The vault
+  enables SQLite `secure_delete` and checkpoints the write-ahead log
+  after each, so erased envelopes and pre-rotation envelopes no
+  longer linger in free pages or WAL frames.
+- The redaction wall is now total. `secret.Value` implements
+  `fmt.Formatter` so numeric verbs like `%d` redact, and holds its
+  bytes behind a pointer so a Value in another struct's unexported
+  field renders as an address, not plaintext, under fmt reflection.
+- The identity write is now crash-safe. `Write` fsyncs the file and
+  `Replace` fsyncs the directory, so a crash cannot leave the sole
+  private key zero-length or missing.
+- Identity load no longer wraps the age parse error, which could
+  carry fragments of decrypted file content into a printed error.
+- The identity's containing directory is refused if group- or
+  world-accessible, on both write and load, matching the file check.
+- `--passphrase-file` is refused when it is a regular file with
+  group or world permission bits. Process-substitution streams are
+  still accepted.
+- The structured logger redacts any attribute keyed `passphrase`,
+  `value`, `plaintext`, `identity`, or `secret` as a backstop.
+
+### Fixed
+
+- `disable` can no longer resurrect a version that a concurrent
+  `purge` destroyed between its check and its update.
+- An interrupted `rekey` that left the identity at its `.new` sibling
+  now self-heals on the next read instead of reporting the identity
+  as missing and suggesting `init`.
+- A failed `init` self-test removes the identity and vault it created
+  so a re-run is not wedged on "already exists."
+- `init` no longer treats a permission error while probing for an
+  existing identity as permission to create one.
+- `--env-name` is validated as a shell identifier at `set` time,
+  rather than only warned about when `reveal --format` runs.
+- `Value.Expose` documents that the returned slice aliases internal
+  storage, and the decrypted envelope payload is wiped after use.
+- Vault write transactions take an immediate lock, avoiding a
+  spurious busy error when two invocations write concurrently.
 
 ## [1.0.1] - 2026-07-12
 
@@ -85,5 +131,6 @@ and there is no plaintext storage mode.
   command, configuration, the security model, architecture, and
   development.
 
+[1.1.0]: https://github.com/samuel-stidham/safetybox/releases/tag/v1.1.0
 [1.0.1]: https://github.com/samuel-stidham/safetybox/releases/tag/v1.0.1
 [1.0.0]: https://github.com/samuel-stidham/safetybox/releases/tag/v1.0.0

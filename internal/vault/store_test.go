@@ -307,6 +307,41 @@ func TestEntries(t *testing.T) {
 	assert.Empty(t, unnamed[0].EnvName, "a secret without an env name scans as empty")
 }
 
+// TestEntriesPrefixIsExactNotLike proves the prefix filter does not
+// treat name characters as LIKE wildcards or fold ASCII case, so
+// reveal --prefix cannot over-match and disclose unselected secrets.
+func TestEntriesPrefixIsExactNotLike(t *testing.T) {
+	testVault := openTestVault(t)
+
+	for _, name := range []string{"api/my_service", "api/myXservice", "prod/db", "api/my_service/child"} {
+		_, err := testVault.AppendVersion(name, vault.SetOptions{}, fakeSealer(t))
+		require.NoError(t, err)
+	}
+
+	// `_` must be literal, not a single-char wildcard.
+	got, err := testVault.Entries(vault.EntryFilter{Prefix: "api/my_service"})
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(got))
+	for _, entry := range got {
+		names = append(names, entry.Name)
+	}
+
+	assert.ElementsMatch(t, []string{"api/my_service", "api/my_service/child"}, names,
+		"prefix must match literally, never treat _ as a wildcard")
+	assert.NotContains(t, names, "api/myXservice", "_ must not match an arbitrary character")
+
+	// Case sensitivity: Prod/ must not match prod/.
+	upper, err := testVault.Entries(vault.EntryFilter{Prefix: "Prod/"})
+	require.NoError(t, err)
+	assert.Empty(t, upper, "prefix match must be case-sensitive")
+
+	// A wildcard character in the prefix matches nothing literal.
+	wildcard, err := testVault.Entries(vault.EntryFilter{Prefix: "%"})
+	require.NoError(t, err)
+	assert.Empty(t, wildcard, "a literal % prefix must not match every row")
+}
+
 func TestRekeyReplacesEnvelopesAndRecipient(t *testing.T) {
 	testVault := openTestVault(t)
 

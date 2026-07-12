@@ -127,6 +127,21 @@ func TestOpenTruncatedBlobFails(t *testing.T) {
 	sealed, err := envelope.Seal(identity.Recipient(), testAddress, secret.New([]byte(fakePlaintext)))
 	require.NoError(t, err)
 
-	_, err = envelope.Open(identity, testAddress, sealed[:len(sealed)/2])
-	require.Error(t, err)
+	tests := []struct {
+		name string
+		blob []byte
+	}{
+		{name: "empty", blob: nil},
+		{name: "one byte", blob: sealed[:1]},
+		{name: "header only", blob: sealed[:min(len(sealed)-1, 100)]},
+		{name: "half", blob: sealed[:len(sealed)/2]},
+		{name: "one byte short", blob: sealed[:len(sealed)-1]},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := envelope.Open(identity, testAddress, testCase.blob)
+			require.ErrorIs(t, err, envelope.ErrDecryptFailed)
+		})
+	}
 }
