@@ -3,7 +3,7 @@
 SafetyBox is a single-user, CLI-first secrets manager for *nix. It keeps
 named, versioned secrets in a SQLite vault. Every value is sealed in an
 [age](https://age-encryption.org) envelope before it touches disk. There
-is no server, no GUI, and no unencrypted mode.
+is no server, no GUI, and no unencrypted storage.
 
 ## Status
 
@@ -99,8 +99,10 @@ the environment.
 
 Plaintext secret bytes live in one Go type, in one package, and leave it
 through one method. Formatting, JSON encoding, and logging all render
-`[REDACTED]` instead of the value. The vault file is created `0600` and
-the identity file is `0600` inside a `0700` directory.
+`[REDACTED]` instead of the value. reveal is the single verb that prints
+plaintext, deliberately and only when you ask for it. Everything else
+redacts. The vault file is created `0600` and the identity file is
+`0600` inside a `0700` directory.
 
 There is no plaintext storage mode and none will be added. The
 [security model](docs/security.md) documents the full set of

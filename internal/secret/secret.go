@@ -27,8 +27,9 @@ func New(plaintext []byte) Value {
 }
 
 // Expose returns the plaintext bytes. This is the ONLY plaintext exit.
-// Call it as late as possible and only on the reveal, get, and exec
-// paths.
+// Call it as late as possible. The call sites are the reveal output,
+// the exec environment, the envelope seal path, and the init
+// self-test.
 func (v Value) Expose() []byte {
 	return v.bytes
 }

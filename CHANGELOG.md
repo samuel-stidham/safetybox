@@ -8,7 +8,7 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 The first release. A single-user, CLI-first secrets manager for
 *nix. Values are sealed in age envelopes, metadata lives in SQLite,
-and there is no plaintext mode.
+and there is no plaintext storage mode.
 
 ### Added
 
