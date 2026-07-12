@@ -386,7 +386,7 @@ func (v *Vault) Meta(name string) (SecretMeta, []VersionMeta, error) {
 // ASCII case, which would over-match and, through reveal --prefix,
 // disclose secrets the caller did not select. The prefix is bound
 // twice: once for its length, once for the compared substring. An
-// empty prefix yields substr(name,1,0)=” and matches everything.
+// empty prefix yields substr(s.name, 1, 0) = ” and matches everything.
 const summaryQuery = `SELECT s.id, s.name, s.env_name, s.created_at, s.updated_at, s.deleted_at, s.expires_at,
 	COALESCE(MAX(sv.version_number), 0)
 	FROM secret s LEFT JOIN secret_version sv ON sv.secret_id = s.id

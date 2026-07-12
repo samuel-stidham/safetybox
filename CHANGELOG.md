@@ -67,6 +67,9 @@ versions follow [Semantic Versioning](https://semver.org/).
   storage, and the decrypted envelope payload is wiped after use.
 - Vault write transactions take an immediate lock, avoiding a
   spurious busy error when two invocations write concurrently.
+- `rekey` now surfaces a real error if it cannot clear a stale staged
+  identity, instead of swallowing it and failing later with a
+  confusing "already exists" from the identity write.
 
 ## [1.0.1] - 2026-07-12
 
