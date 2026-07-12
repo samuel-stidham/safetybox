@@ -71,12 +71,52 @@ printing it. Expired secrets warn on stderr and still resolve.
 ```sh
 safetybox reveal <name>
 safetybox reveal <name> --json | jq -r .value
+safetybox reveal <name> <name>...
+safetybox reveal --env --format fish | source
+safetybox reveal --prefix projects/myapp --format sh
 ```
 
 The single verb that prints plaintext. Everything else redacts.
 
+One name prints one JSON object, unchanged from earlier releases.
+
 ```json
-{"name":"api/stripe/live","version":2,"expired":false,"value":"sk_live_example"}
+{"name":"api/stripe/live","envName":"STRIPE_KEY","version":2,"expired":false,"value":"sk_live_example"}
+```
+
+Several names, `--env`, or `--prefix` select a batch. The whole batch
+decrypts with one passphrase read and one identity unlock, which is
+the point. `--env` selects every secret that has an env name.
+`--prefix` selects every secret under a name prefix. The two filters
+compose, and filters cannot be mixed with explicit names. Batch JSON
+output is an array. An explicit name that does not resolve fails the
+whole batch. A filter that matches nothing prints an empty array.
+
+`--format sh` and `--format fish` emit assignment lines ready to
+source into a shell session, using the env name recorded by set.
+
+```sh
+export STRIPE_KEY='sk_live_example'
+```
+
+```fish
+set -gx STRIPE_KEY 'sk_live_example'
+```
+
+Values are single-quoted for the target shell, so embedded quotes,
+command substitutions, and newlines stay inert text. A selected
+secret with no env name, or with an env name that is not a valid
+shell identifier, is skipped with a warning on stderr and never
+silently dropped. Load your global secrets in one line:
+
+```fish
+safetybox reveal --env --format fish --passphrase-file FILE | source
+```
+
+And a project's secrets in a `.envrc`:
+
+```sh
+eval "$(safetybox reveal --prefix projects/myapp --format sh --passphrase-file FILE)"
 ```
 
 ## show

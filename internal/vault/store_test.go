@@ -255,7 +255,7 @@ func TestPurgeDestroysEnvelopes(t *testing.T) {
 	require.ErrorIs(t, err, vault.ErrSecretDeleted)
 }
 
-func TestEnvEntries(t *testing.T) {
+func TestEntries(t *testing.T) {
 	testVault := openTestVault(t)
 	envName := "FAKE_STRIPE_KEY"
 
@@ -265,14 +265,46 @@ func TestEnvEntries(t *testing.T) {
 	_, err = testVault.AppendVersion("api/stripe/live", vault.SetOptions{}, fakeSealer(t))
 	require.NoError(t, err)
 
-	_, err = testVault.AppendVersion("no/env/name", vault.SetOptions{}, fakeSealer(t))
+	_, err = testVault.AppendVersion("db/postgres", vault.SetOptions{}, fakeSealer(t))
 	require.NoError(t, err)
 
-	entries, err := testVault.EnvEntries()
+	tests := []struct {
+		name   string
+		filter vault.EntryFilter
+		want   []string
+	}{
+		{
+			name:   "zero filter selects everything",
+			filter: vault.EntryFilter{},
+			want:   []string{"api/stripe/live", "db/postgres"},
+		},
+		{name: "env filter drops unnamed", filter: vault.EntryFilter{EnvNamed: true}, want: []string{"api/stripe/live"}},
+		{name: "prefix filter", filter: vault.EntryFilter{Prefix: "db/"}, want: []string{"db/postgres"}},
+		{name: "filters compose to empty", filter: vault.EntryFilter{Prefix: "db/", EnvNamed: true}, want: nil},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			entries, err := testVault.Entries(testCase.filter)
+			require.NoError(t, err)
+			require.Len(t, entries, len(testCase.want))
+
+			for index, entry := range entries {
+				assert.Equal(t, testCase.want[index], entry.Name)
+			}
+		})
+	}
+
+	entries, err := testVault.Entries(vault.EntryFilter{EnvNamed: true})
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, envName, entries[0].EnvName)
-	assert.Equal(t, int64(2), entries[0].Version, "env entries resolve the newest enabled version")
+	assert.Equal(t, int64(2), entries[0].Version, "entries resolve the newest enabled version")
+
+	unnamed, err := testVault.Entries(vault.EntryFilter{Prefix: "db/"})
+	require.NoError(t, err)
+	require.Len(t, unnamed, 1)
+	assert.Empty(t, unnamed[0].EnvName, "a secret without an env name scans as empty")
 }
 
 func TestRekeyReplacesEnvelopesAndRecipient(t *testing.T) {

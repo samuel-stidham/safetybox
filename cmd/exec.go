@@ -68,7 +68,7 @@ func buildSecretEnv(cobraCmd *cobra.Command, opts *options) ([]string, error) {
 		return nil, err
 	}
 
-	entries, err := openedVault.EnvEntries()
+	entries, err := openedVault.Entries(vault.EntryFilter{EnvNamed: true})
 
 	_ = openedVault.Close()
 

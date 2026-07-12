@@ -4,6 +4,22 @@ All notable changes to safetybox are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Batch reveal. `reveal` now accepts several names, `--env` for every
+  secret with an env name, and `--prefix` for every secret under a
+  name prefix. The whole batch decrypts with one passphrase read.
+- Shell output for reveal. `--format sh` and `--format fish` emit
+  quoted assignment lines ready to source into a session, so shell
+  startup and direnv can load secrets in one invocation. Secrets
+  without a usable env name are skipped with a warning.
+- Single-name reveal output now includes envName when the secret has
+  one. The one-object output shape is otherwise unchanged.
+- Command documentation in `doc.go`, so pkg.go.dev renders a full
+  overview with the verb table and the security model.
+
 ## [1.0.1] - 2026-07-12
 
 A documentation wording pass. reveal has always printed plaintext on

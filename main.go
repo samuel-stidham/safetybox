@@ -1,4 +1,3 @@
-// Package main is the entry point for the safetybox CLI.
 package main
 
 import "github.com/samuel-stidham/safetybox/cmd"

@@ -543,35 +543,56 @@ func (v *Vault) Purge(name string) (int64, error) {
 	return destroyed, nil
 }
 
-// EnvEntries returns every non-deleted secret with an env name and
-// an enabled version, newest version first per secret.
-func (v *Vault) EnvEntries() ([]EnvEntry, error) {
-	rows, err := v.handle.QueryContext(context.Background(),
-		`SELECT s.name, s.env_name, s.expires_at, sv.version_number, sv.envelope
-		 FROM secret s JOIN secret_version sv ON sv.secret_id = s.id AND sv.state = ?
-		 WHERE s.deleted_at IS NULL AND s.env_name IS NOT NULL
-		 AND sv.version_number = (
-			SELECT MAX(v2.version_number) FROM secret_version v2
-			WHERE v2.secret_id = s.id AND v2.state = ?)
-		 ORDER BY s.name`,
-		string(StateEnabled), string(StateEnabled))
+// entriesQuery builds the batch selection for filter. Every clause
+// keeps to the newest enabled version of non-deleted secrets.
+func entriesQuery(filter EntryFilter) (string, []any) {
+	query := `SELECT s.name, s.env_name, s.expires_at, sv.version_number, sv.envelope
+	 FROM secret s JOIN secret_version sv ON sv.secret_id = s.id AND sv.state = ?
+	 WHERE s.deleted_at IS NULL
+	 AND sv.version_number = (
+		SELECT MAX(v2.version_number) FROM secret_version v2
+		WHERE v2.secret_id = s.id AND v2.state = ?)`
+	args := []any{string(StateEnabled), string(StateEnabled)}
+
+	if filter.EnvNamed {
+		query += " AND s.env_name IS NOT NULL"
+	}
+
+	if filter.Prefix != "" {
+		query += " AND s.name LIKE ? || '%'"
+
+		args = append(args, filter.Prefix)
+	}
+
+	return query + " ORDER BY s.name", args
+}
+
+// Entries returns the newest enabled version of every non-deleted
+// secret matching filter, ordered by name.
+func (v *Vault) Entries(filter EntryFilter) ([]Entry, error) {
+	query, args := entriesQuery(filter)
+
+	rows, err := v.handle.QueryContext(context.Background(), query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("env entries: %w", err)
+		return nil, fmt.Errorf("batch entries: %w", err)
 	}
 
 	defer func() { _ = rows.Close() }()
 
-	var entries []EnvEntry
+	var entries []Entry
 
 	for rows.Next() {
 		var (
-			entry     EnvEntry
+			entry     Entry
+			envName   sql.NullString
 			expiresAt sql.NullString
 		)
 
-		if err := rows.Scan(&entry.Name, &entry.EnvName, &expiresAt, &entry.Version, &entry.Envelope); err != nil {
-			return nil, fmt.Errorf("scan env entry: %w", err)
+		if err := rows.Scan(&entry.Name, &envName, &expiresAt, &entry.Version, &entry.Envelope); err != nil {
+			return nil, fmt.Errorf("scan batch entry: %w", err)
 		}
+
+		entry.EnvName = envName.String
 
 		if expiry, ok, err := parseNullableTime(expiresAt); err != nil {
 			return nil, err
@@ -583,7 +604,7 @@ func (v *Vault) EnvEntries() ([]EnvEntry, error) {
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("env entries: %w", err)
+		return nil, fmt.Errorf("batch entries: %w", err)
 	}
 
 	return entries, nil
