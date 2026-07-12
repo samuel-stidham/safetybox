@@ -13,7 +13,7 @@ import (
 
 // redactSensitiveKeys replaces the value of any attribute whose key
 // names secret-bearing content, regardless of the value's type.
-// secret.Value already redacts itself; this is a defense-in-depth
+// secret.Value already redacts itself. This is a defense-in-depth
 // backstop for a raw string or []byte logged under one of these keys
 // by mistake. Group keys are left alone so only leaf attributes are
 // affected.

@@ -167,8 +167,8 @@ func TestSecretValueNeverLeaks(t *testing.T) {
 }
 
 // TestSecretValueUnexportedFieldNeverLeaks covers the fmt-reflection
-// path that method dispatch cannot reach. Plaintext must be absent;
-// the redaction marker is not required because the pointer renders as
+// path that method dispatch cannot reach. Plaintext must be absent.
+// The redaction marker is not required because the pointer renders as
 // an address.
 func TestSecretValueUnexportedFieldNeverLeaks(t *testing.T) {
 	value := secret.New([]byte(fakePlaintext))

@@ -70,6 +70,13 @@ versions follow [Semantic Versioning](https://semver.org/).
 - `rekey` now surfaces a real error if it cannot clear a stale staged
   identity, instead of swallowing it and failing later with a
   confusing "already exists" from the identity write.
+- `rekey` can no longer lock the vault. The post-commit WAL checkpoint
+  in `purge` and `rekey` is now best effort, so a checkpoint failure
+  after a committed rekey no longer looks like a rekey failure and no
+  longer makes the caller discard the new identity. Discarding it
+  would have left the vault re-encrypted to a key that was just
+  deleted. The unscrubbed WAL frames are reclaimed by the next
+  checkpoint.
 
 ## [1.0.1] - 2026-07-12
 

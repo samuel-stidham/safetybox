@@ -560,17 +560,21 @@ func (v *Vault) Purge(name string) (int64, error) {
 	}
 
 	// Flush the WAL so the erased envelope bytes do not linger in
-	// write-ahead frames. secure_delete zeroed the freed pages; this
-	// truncates the log that still holds their pre-images.
-	if err := v.checkpoint(); err != nil {
-		return 0, err
-	}
+	// write-ahead frames. secure_delete zeroed the freed pages. This
+	// truncates the log that still holds their pre-images. It is best
+	// effort for the same reason as rekey. The purge is already
+	// committed, so a checkpoint error must not report the committed
+	// purge as a failure. The next checkpoint reclaims the frames.
+	_ = v.checkpoint()
 
 	return destroyed, nil
 }
 
 // checkpoint flushes and truncates the WAL so that content freed by a
 // destructive operation cannot be recovered from write-ahead frames.
+// A single connection (SetMaxOpenConns) makes this reliable in normal
+// operation. It can still fail on genuine I/O errors, where callers
+// treat it as best effort rather than failing a committed operation.
 func (v *Vault) checkpoint() error {
 	if _, err := v.handle.ExecContext(context.Background(), "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		return fmt.Errorf("checkpoint wal: %w", err)
@@ -696,10 +700,14 @@ func (v *Vault) Rekey(newRecipient string, reseal Resealer) (int64, error) {
 	}
 
 	// Flush the WAL so envelopes sealed to the old recipient do not
-	// survive in write-ahead frames after rotation.
-	if err := v.checkpoint(); err != nil {
-		return 0, err
-	}
+	// survive in write-ahead frames after rotation. This is best
+	// effort on purpose: the rekey is already committed, and the
+	// caller treats any error from Rekey as "the vault is unchanged"
+	// and discards the freshly staged new identity. Returning a
+	// checkpoint error here would destroy the only key that can read
+	// the re-encrypted vault. An unscrubbed WAL frame, cleaned up by
+	// the next checkpoint, is the lesser evil than a locked vault.
+	_ = v.checkpoint()
 
 	return int64(len(live)), nil
 }

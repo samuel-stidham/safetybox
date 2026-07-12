@@ -228,7 +228,7 @@ func initSchema(handle *sql.DB, recipient string) error {
 // effort. It is for unwinding a vault created earlier in the same
 // invocation, such as after a failed self-test, so a retry does not
 // hit ErrVaultExists. It does not distinguish a live vault from a
-// half-created one; the caller owns that judgement.
+// half-created one. The caller owns that judgement.
 func RemoveFiles(path string) {
 	_ = os.Remove(path)
 	_ = os.Remove(path + "-wal")
