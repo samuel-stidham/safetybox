@@ -4,6 +4,26 @@ All notable changes to safetybox are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-07-12
+
+A documentation wording pass. reveal has always printed plaintext on
+purpose, and the docs now say so consistently instead of implying
+that nothing ever reaches the terminal.
+
+### Changed
+
+- The README and this changelog now scope the encryption guarantee
+  to storage. There is no unencrypted storage mode. `reveal` is named
+  as the single verb that prints plaintext, and everything else
+  redacts.
+
+### Fixed
+
+- The `secret.Value.Expose` doc comment claimed `get` was a call
+  site. It never was. The comment now lists the real ones: the
+  reveal output, the exec environment, the envelope seal path, and
+  the init self-test.
+
 ## [1.0.0] - 2026-07-12
 
 The first release. A single-user, CLI-first secrets manager for
@@ -49,4 +69,5 @@ and there is no plaintext storage mode.
   command, configuration, the security model, architecture, and
   development.
 
+[1.0.1]: https://github.com/samuel-stidham/safetybox/releases/tag/v1.0.1
 [1.0.0]: https://github.com/samuel-stidham/safetybox/releases/tag/v1.0.0
