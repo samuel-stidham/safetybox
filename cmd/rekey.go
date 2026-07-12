@@ -39,6 +39,12 @@ func runRekey(cobraCmd *cobra.Command, opts *options) error {
 		return err
 	}
 
+	// Heal a prior rekey that crashed mid-swap before doing anything
+	// else, so the load below sees a real identity file.
+	if err := completeInterruptedRekey(identityPath); err != nil {
+		return err
+	}
+
 	passphrase, err := readPassphrase(cobraCmd, opts.passphraseFile, "Passphrase: ")
 	if err != nil {
 		return err
@@ -63,8 +69,8 @@ func runRekey(cobraCmd *cobra.Command, opts *options) error {
 	// without their key on disk.
 	stagedPath := identityPath + ".new"
 
-	if err := identity.Write(stagedPath, newKey, passphrase); err != nil {
-		return userHint(err)
+	if err := stageNewIdentity(stagedPath, newKey, passphrase); err != nil {
+		return err
 	}
 
 	count, err := rekeyVault(opts, oldKey, newKey)
@@ -83,6 +89,24 @@ func runRekey(cobraCmd *cobra.Command, opts *options) error {
 		RekeyedVersions: count,
 		BackupIdentity:  identityPath + ".bak",
 	})
+}
+
+// stageNewIdentity writes the new identity to its .new sibling before
+// the vault transaction. A leftover .new from an earlier crashed
+// rekey is removed first: the identity loaded cleanly above, so it is
+// a stale staging file, not a live key. A removal failure other than
+// "already gone" is surfaced, so a permission problem is reported
+// plainly instead of resurfacing as a confusing ErrExists from Write.
+func stageNewIdentity(stagedPath string, newKey *age.X25519Identity, passphrase []byte) error {
+	if err := os.Remove(stagedPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale staged identity %s: %w", stagedPath, err)
+	}
+
+	if err := identity.Write(stagedPath, newKey, passphrase); err != nil {
+		return userHint(err)
+	}
+
+	return nil
 }
 
 func rekeyVault(opts *options, oldKey, newKey *age.X25519Identity) (int64, error) {

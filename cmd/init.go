@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 
 	"github.com/samuel-stidham/safetybox/internal/envelope"
@@ -41,8 +42,12 @@ func runInit(cobraCmd *cobra.Command, opts *options) error {
 		return err
 	}
 
-	if _, err := os.Stat(identityPath); err == nil {
+	switch _, err := os.Stat(identityPath); {
+	case err == nil:
 		return fmt.Errorf("identity already exists at %s: refusing to overwrite it, move it aside first", identityPath)
+	case !errors.Is(err, fs.ErrNotExist):
+		// A permission or path error is not a green light to create.
+		return fmt.Errorf("stat identity %s: %w", identityPath, err)
 	}
 
 	passphrase, err := readNewPassphrase(cobraCmd, opts.passphraseFile, "Passphrase for the new identity: ")
@@ -70,6 +75,12 @@ func runInit(cobraCmd *cobra.Command, opts *options) error {
 	}
 
 	if err := selfTest(vaultPath, key); err != nil {
+		// Both files were created this invocation and guard nothing,
+		// so remove them rather than wedge a re-run on ErrExists.
+		_ = os.Remove(identityPath)
+
+		vault.RemoveFiles(vaultPath)
+
 		return fmt.Errorf("self-test: %w", err)
 	}
 

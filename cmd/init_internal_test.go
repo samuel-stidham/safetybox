@@ -147,7 +147,7 @@ func TestInitMissingPassphraseFile(t *testing.T) {
 		filepath.Join(tmp, "config", "identity.age"),
 		filepath.Join(tmp, "data", "vault.db"),
 		filepath.Join(tmp, "does-not-exist"))
-	require.ErrorContains(t, err, "read passphrase file")
+	require.ErrorContains(t, err, "passphrase file")
 }
 
 func TestInitWithoutPassphraseFileNeedsTerminal(t *testing.T) {

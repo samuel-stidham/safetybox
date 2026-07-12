@@ -68,6 +68,12 @@ func Open(identity age.Identity, address string, blob []byte) (secret.Value, err
 		return secret.Value{}, fmt.Errorf("open %s: %w: %w", address, ErrDecryptFailed, err)
 	}
 
+	// The decrypted payload holds plaintext on every path, including
+	// the address-mismatch refusal below where it is the wrong row's
+	// plaintext. secret.New copies what it keeps, so wipe the original
+	// once this returns regardless of outcome.
+	defer clear(payload)
+
 	separator := bytes.IndexByte(payload, addressSeparator)
 	if separator < 0 {
 		return secret.Value{}, fmt.Errorf("open %s: no embedded address: %w", address, ErrAddressMismatch)

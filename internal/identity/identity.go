@@ -3,15 +3,20 @@
 //
 // The file is age-encrypted with an scrypt passphrase. On disk it is
 // 0600 inside a 0700 directory, and Load refuses group- or
-// world-readable files the way ssh does. The decrypted key material
-// is held in a memguard LockedBuffer for the duration of one
-// invocation and destroyed by the returned cleanup function.
+// world-readable files, and a loose containing directory, the way ssh
+// does. The decrypted file bytes pass through a memguard LockedBuffer
+// that is wiped by the returned cleanup function. The parsed key
+// itself is an *age.X25519Identity, which age holds in an ordinary Go
+// slice on the heap for the duration of one invocation. That heap
+// copy is the practical limit of the in-memory protection here.
 package identity
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -33,11 +38,24 @@ const (
 func Load(path string, passphrase []byte) (*age.X25519Identity, func(), error) {
 	cleaned := filepath.Clean(path)
 
-	info, err := os.Stat(cleaned)
-	if os.IsNotExist(err) {
+	if err := checkDirPerms(filepath.Dir(cleaned)); err != nil {
+		return nil, nil, err
+	}
+
+	// Open once and stat the descriptor, so the permission check and
+	// the read provably see the same file even if the path is swapped.
+	file, err := os.Open(cleaned)
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil, fmt.Errorf("%s: %w", cleaned, ErrNotFound)
 	}
 
+	if err != nil {
+		return nil, nil, fmt.Errorf("open identity %s: %w", cleaned, err)
+	}
+
+	defer func() { _ = file.Close() }()
+
+	info, err := file.Stat()
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat identity %s: %w", cleaned, err)
 	}
@@ -46,12 +64,32 @@ func Load(path string, passphrase []byte) (*age.X25519Identity, func(), error) {
 		return nil, nil, fmt.Errorf("%s has mode %04o: %w", cleaned, info.Mode().Perm(), ErrUnsafePermissions)
 	}
 
-	sealed, err := os.ReadFile(cleaned)
+	sealed, err := io.ReadAll(file)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read identity %s: %w", cleaned, err)
 	}
 
 	return decrypt(sealed, passphrase)
+}
+
+// checkDirPerms refuses an identity directory readable or writable by
+// group or world, the ssh-style check invariant 3 extends to the
+// containing directory, whether the directory is fresh or pre-existing.
+func checkDirPerms(dir string) error {
+	info, err := os.Stat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%s: %w", dir, ErrNotFound)
+	}
+
+	if err != nil {
+		return fmt.Errorf("stat identity directory %s: %w", dir, err)
+	}
+
+	if info.Mode().Perm()&unsafeBits != 0 {
+		return fmt.Errorf("directory %s has mode %04o: %w", dir, info.Mode().Perm(), ErrUnsafeDirPermissions)
+	}
+
+	return nil
 }
 
 func decrypt(sealed, passphrase []byte) (*age.X25519Identity, func(), error) {
@@ -81,7 +119,10 @@ func decrypt(sealed, passphrase []byte) (*age.X25519Identity, func(), error) {
 	if err != nil {
 		cleanup()
 
-		return nil, nil, fmt.Errorf("%w: %w", ErrMalformed, err)
+		// The age parse error can embed fragments of the decrypted
+		// file (the bech32 HRP and byte values), so it is dropped
+		// here rather than wrapped. Invariant 1: never in errors.
+		return nil, nil, fmt.Errorf("parse identity: %w", ErrMalformed)
 	}
 
 	return parsed, cleanup, nil
@@ -98,8 +139,16 @@ func Write(path string, key *age.X25519Identity, passphrase []byte) error {
 
 	cleaned := filepath.Clean(path)
 
-	if err := os.MkdirAll(filepath.Dir(cleaned), dirMode); err != nil {
+	dir := filepath.Dir(cleaned)
+
+	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return fmt.Errorf("create identity directory: %w", err)
+	}
+
+	// MkdirAll leaves a pre-existing directory's mode untouched, so
+	// enforce 0700 explicitly rather than trusting the create path.
+	if err := checkDirPerms(dir); err != nil {
+		return err
 	}
 
 	file, err := os.OpenFile(cleaned, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fileMode)
@@ -115,6 +164,14 @@ func Write(path string, key *age.X25519Identity, passphrase []byte) error {
 		_ = file.Close()
 
 		return fmt.Errorf("write identity file: %w", err)
+	}
+
+	// fsync before close so a crash cannot leave a zero-length or
+	// partial identity, which for the sole private key is data loss.
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+
+		return fmt.Errorf("sync identity file: %w", err)
 	}
 
 	if err := file.Close(); err != nil {
@@ -140,6 +197,30 @@ func Replace(path string, key *age.X25519Identity, passphrase []byte) error {
 		_ = os.Remove(temp)
 
 		return fmt.Errorf("replace identity file: %w", err)
+	}
+
+	// fsync the directory so the rename itself is durable. Without it,
+	// a crash can commit the rename's data but not the directory entry,
+	// leaving the sole private key missing.
+	if err := syncDir(filepath.Dir(cleaned)); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// syncDir flushes a directory's metadata so a rename inside it
+// survives a crash.
+func syncDir(dir string) error {
+	handle, err := os.Open(filepath.Clean(dir))
+	if err != nil {
+		return fmt.Errorf("open identity directory %s: %w", dir, err)
+	}
+
+	defer func() { _ = handle.Close() }()
+
+	if err := handle.Sync(); err != nil {
+		return fmt.Errorf("sync identity directory %s: %w", dir, err)
 	}
 
 	return nil

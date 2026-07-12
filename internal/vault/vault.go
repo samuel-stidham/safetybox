@@ -63,7 +63,7 @@ func Create(path, recipient string) error {
 
 	handle, err := openHandle(path)
 	if err != nil {
-		removeBestEffort(path)
+		RemoveFiles(path)
 
 		return err
 	}
@@ -71,7 +71,7 @@ func Create(path, recipient string) error {
 	if err := initSchema(handle, recipient); err != nil {
 		_ = handle.Close()
 
-		removeBestEffort(path)
+		RemoveFiles(path)
 
 		return err
 	}
@@ -154,12 +154,31 @@ func (v *Vault) metaValue(key string) (string, error) {
 }
 
 func openHandle(path string) (*sql.DB, error) {
-	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
+	// secure_delete(1) makes SQLite overwrite freed content with zeros
+	// instead of leaving it in freelist pages, so purge and rekey
+	// actually destroy old envelope bytes. _txlock=immediate starts
+	// write transactions with a write lock up front, avoiding the
+	// SQLITE_BUSY_SNAPSHOT a deferred read-then-write hits under
+	// concurrency.
+	dsn := "file:" + path +
+		"?_txlock=immediate" +
+		"&_pragma=journal_mode(WAL)" +
+		"&_pragma=foreign_keys(1)" +
+		"&_pragma=secure_delete(1)" +
+		"&_pragma=busy_timeout(5000)"
 
 	handle, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
+
+	// One connection per vault. This is a single-user CLI, so nothing
+	// is lost to serialization, and it guarantees the post-purge and
+	// post-rekey wal_checkpoint(TRUNCATE) runs on the only connection,
+	// with no other pooled connection pinning a WAL frame it cannot
+	// then reclaim. That is what makes the secure-delete scrub of the
+	// write-ahead log reliable rather than best effort.
+	handle.SetMaxOpenConns(1)
 
 	if err := handle.PingContext(context.Background()); err != nil {
 		_ = handle.Close()
@@ -205,9 +224,12 @@ func initSchema(handle *sql.DB, recipient string) error {
 	return nil
 }
 
-// removeBestEffort cleans up a half-created vault file so a retry
-// does not hit ErrVaultExists.
-func removeBestEffort(path string) {
+// RemoveFiles deletes a vault database and its WAL siblings, best
+// effort. It is for unwinding a vault created earlier in the same
+// invocation, such as after a failed self-test, so a retry does not
+// hit ErrVaultExists. It does not distinguish a live vault from a
+// half-created one. The caller owns that judgement.
+func RemoveFiles(path string) {
 	_ = os.Remove(path)
 	_ = os.Remove(path + "-wal")
 	_ = os.Remove(path + "-shm")

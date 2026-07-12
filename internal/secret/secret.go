@@ -1,20 +1,29 @@
 // Package secret defines Value, the only type in this codebase
 // allowed to hold plaintext secret bytes.
 //
-// The bytes are unexported. Plaintext exits only through Expose.
-// Every other rendering path (fmt, JSON, slog) is overridden to return
-// a redaction marker. Never add another exit and never move this type
-// into a shared flat package. The package boundary is what makes the
-// redaction compiler-enforced.
+// The bytes are unexported and held behind a pointer. Plaintext exits
+// only through Expose. Every fmt verb is intercepted by Format, and
+// JSON and slog are overridden, so a directly rendered Value always
+// redacts. A Value stored in another struct's unexported field cannot
+// be method-dispatched by fmt reflection, so the pointer indirection
+// ensures that path reflects an address rather than the bytes. Never
+// add another exit and never move this type into a shared flat
+// package. The package boundary is what keeps the redaction total.
 package secret
 
-import "log/slog"
+import (
+	"fmt"
+	"io"
+	"log/slog"
+)
 
 const redacted = "[REDACTED]"
 
-// Value holds plaintext secret bytes behind a redacting wall.
+// Value holds plaintext secret bytes behind a redacting wall. The
+// bytes sit behind a pointer so that fmt reflecting into an
+// unexported Value field prints the pointer, never the plaintext.
 type Value struct {
-	bytes []byte
+	held *[]byte
 }
 
 // New copies plaintext into a Value. The caller keeps ownership
@@ -23,15 +32,29 @@ func New(plaintext []byte) Value {
 	held := make([]byte, len(plaintext))
 	copy(held, plaintext)
 
-	return Value{bytes: held}
+	return Value{held: &held}
 }
 
 // Expose returns the plaintext bytes. This is the ONLY plaintext exit.
 // Call it as late as possible. The call sites are the reveal output,
 // the exec environment, the envelope seal path, and the init
 // self-test.
+//
+// The returned slice aliases the Value's internal storage. Callers
+// must not retain it past the Value's lifetime or mutate it, because
+// copies of a Value share one backing array.
 func (v Value) Expose() []byte {
-	return v.bytes
+	if v.held == nil {
+		return nil
+	}
+
+	return *v.held
+}
+
+// Format implements fmt.Formatter so that EVERY verb redacts,
+// including numeric verbs like %d and %c that bypass fmt.Stringer.
+func (v Value) Format(f fmt.State, _ rune) {
+	_, _ = io.WriteString(f, redacted)
 }
 
 // String implements fmt.Stringer and always redacts.

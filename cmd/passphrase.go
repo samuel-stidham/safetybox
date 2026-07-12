@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -52,8 +53,35 @@ func readNewPassphrase(cobraCmd *cobra.Command, passphraseFile, label string) ([
 	return passphrase, nil
 }
 
+// passphraseUnsafeBits are the group and world permission bits a
+// regular passphrase file must not carry, mirroring the identity
+// file's ssh-style check (invariant 3).
+const passphraseUnsafeBits = 0o077
+
 func passphraseFromFile(passphraseFile string) ([]byte, error) {
-	content, err := os.ReadFile(filepath.Clean(passphraseFile))
+	// Open once and stat the descriptor so the check and the read see
+	// the same object.
+	file, err := os.Open(filepath.Clean(passphraseFile))
+	if err != nil {
+		return nil, fmt.Errorf("open passphrase file: %w", err)
+	}
+
+	defer func() { _ = file.Close() }()
+
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat passphrase file: %w", err)
+	}
+
+	// Only a regular on-disk file is held to the permission check. A
+	// fifo or pipe from process substitution (secret-get | psub) is a
+	// transient stream, not an at-rest secret, so it is allowed.
+	if info.Mode().IsRegular() && info.Mode().Perm()&passphraseUnsafeBits != 0 {
+		return nil, fmt.Errorf("passphrase file %s has mode %04o: run chmod 600 on it",
+			passphraseFile, info.Mode().Perm())
+	}
+
+	content, err := io.ReadAll(file)
 	if err != nil {
 		return nil, fmt.Errorf("read passphrase file: %w", err)
 	}

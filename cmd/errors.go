@@ -33,6 +33,8 @@ func userHint(err error) error {
 		return fmt.Errorf("%w: check the passphrase", err)
 	case errors.Is(err, identity.ErrUnsafePermissions):
 		return fmt.Errorf("%w: run `chmod 600` on the identity file", err)
+	case errors.Is(err, identity.ErrUnsafeDirPermissions):
+		return fmt.Errorf("%w: run `chmod 700` on the identity directory", err)
 	case errors.Is(err, vault.ErrSecretDeleted):
 		return fmt.Errorf("%w: `set` a new value to revive it or `purge` it for good", err)
 	case errors.Is(err, vault.ErrVersionNotFound):

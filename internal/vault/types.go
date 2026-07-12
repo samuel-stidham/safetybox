@@ -68,13 +68,24 @@ type Resolved struct {
 	Envelope []byte
 }
 
-// EnvEntry is one secret resolvable into a process environment.
-type EnvEntry struct {
+// Entry is one secret selected for batch resolution, carrying the
+// envelope of its newest enabled version. EnvName is empty when the
+// secret has none.
+type Entry struct {
 	Name      string
 	EnvName   string
 	Version   int64
 	ExpiresAt *time.Time
 	Envelope  []byte
+}
+
+// EntryFilter selects which secrets Entries returns. The zero value
+// selects every non-deleted secret with an enabled version.
+type EntryFilter struct {
+	// Prefix keeps only names that start with it. Empty keeps all.
+	Prefix string
+	// EnvNamed keeps only secrets that carry an env name.
+	EnvNamed bool
 }
 
 // Sealer produces a sealed envelope for a canonical address. The

@@ -381,22 +381,28 @@ func (v *Vault) Meta(name string) (SecretMeta, []VersionMeta, error) {
 	return meta, versions, nil
 }
 
+// summaryQuery matches by exact, case-sensitive prefix. LIKE is not
+// used because it treats `_` and `%` in a name as wildcards and folds
+// ASCII case, which would over-match and, through reveal --prefix,
+// disclose secrets the caller did not select. The prefix is bound
+// twice: once for its length, once for the compared substring. An
+// empty prefix yields substr(s.name, 1, 0) = ” and matches everything.
 const summaryQuery = `SELECT s.id, s.name, s.env_name, s.created_at, s.updated_at, s.deleted_at, s.expires_at,
 	COALESCE(MAX(sv.version_number), 0)
 	FROM secret s LEFT JOIN secret_version sv ON sv.secret_id = s.id
-	WHERE s.deleted_at IS NULL AND s.name LIKE ? || '%'`
+	WHERE s.deleted_at IS NULL AND substr(s.name, 1, length(?)) = ?`
 
 // List returns non-deleted secrets whose name starts with prefix.
 // An empty prefix lists everything.
 func (v *Vault) List(prefix string) ([]Summary, error) {
-	return v.summaries(summaryQuery+" GROUP BY s.id ORDER BY s.name", prefix)
+	return v.summaries(summaryQuery+" GROUP BY s.id ORDER BY s.name", prefix, prefix)
 }
 
 // Stale returns non-deleted secrets whose expiry has passed.
 func (v *Vault) Stale(now time.Time) ([]Summary, error) {
 	query := summaryQuery + " AND s.expires_at IS NOT NULL AND s.expires_at <= ? GROUP BY s.id ORDER BY s.name"
 
-	return v.summaries(query, "", formatTime(now))
+	return v.summaries(query, "", "", formatTime(now))
 }
 
 func (v *Vault) summaries(query string, args ...any) ([]Summary, error) {
@@ -463,11 +469,24 @@ func (v *Vault) Disable(name string, number int64) error {
 		return fmt.Errorf("version %d of %s: %w", number, name, ErrVersionDestroyed)
 	}
 
-	_, err = v.handle.ExecContext(ctx,
-		"UPDATE secret_version SET state = ? WHERE secret_id = ? AND version_number = ?",
-		string(StateDisabled), row.id, number)
+	// The guard on state != destroyed makes the update self-checking,
+	// so a Purge that destroys the row between the SELECT above and
+	// this statement cannot be undone: the update simply affects zero
+	// rows, which is reported as ErrVersionDestroyed.
+	outcome, err := v.handle.ExecContext(ctx,
+		"UPDATE secret_version SET state = ? WHERE secret_id = ? AND version_number = ? AND state != ?",
+		string(StateDisabled), row.id, number, string(StateDestroyed))
 	if err != nil {
 		return fmt.Errorf("disable version %d of %s: %w", number, name, err)
+	}
+
+	changed, err := outcome.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("disable version %d of %s: %w", number, name, err)
+	}
+
+	if changed == 0 {
+		return fmt.Errorf("version %d of %s: %w", number, name, ErrVersionDestroyed)
 	}
 
 	return nil
@@ -540,38 +559,82 @@ func (v *Vault) Purge(name string) (int64, error) {
 		return 0, fmt.Errorf("commit purge of %s: %w", name, err)
 	}
 
+	// Flush the WAL so the erased envelope bytes do not linger in
+	// write-ahead frames. secure_delete zeroed the freed pages. This
+	// truncates the log that still holds their pre-images. It is best
+	// effort for the same reason as rekey. The purge is already
+	// committed, so a checkpoint error must not report the committed
+	// purge as a failure. The next checkpoint reclaims the frames.
+	_ = v.checkpoint()
+
 	return destroyed, nil
 }
 
-// EnvEntries returns every non-deleted secret with an env name and
-// an enabled version, newest version first per secret.
-func (v *Vault) EnvEntries() ([]EnvEntry, error) {
-	rows, err := v.handle.QueryContext(context.Background(),
-		`SELECT s.name, s.env_name, s.expires_at, sv.version_number, sv.envelope
-		 FROM secret s JOIN secret_version sv ON sv.secret_id = s.id AND sv.state = ?
-		 WHERE s.deleted_at IS NULL AND s.env_name IS NOT NULL
-		 AND sv.version_number = (
-			SELECT MAX(v2.version_number) FROM secret_version v2
-			WHERE v2.secret_id = s.id AND v2.state = ?)
-		 ORDER BY s.name`,
-		string(StateEnabled), string(StateEnabled))
+// checkpoint flushes and truncates the WAL so that content freed by a
+// destructive operation cannot be recovered from write-ahead frames.
+// A single connection (SetMaxOpenConns) makes this reliable in normal
+// operation. It can still fail on genuine I/O errors, where callers
+// treat it as best effort rather than failing a committed operation.
+func (v *Vault) checkpoint() error {
+	if _, err := v.handle.ExecContext(context.Background(), "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		return fmt.Errorf("checkpoint wal: %w", err)
+	}
+
+	return nil
+}
+
+// entriesQuery builds the batch selection for filter. Every clause
+// keeps to the newest enabled version of non-deleted secrets.
+func entriesQuery(filter EntryFilter) (string, []any) {
+	query := `SELECT s.name, s.env_name, s.expires_at, sv.version_number, sv.envelope
+	 FROM secret s JOIN secret_version sv ON sv.secret_id = s.id AND sv.state = ?
+	 WHERE s.deleted_at IS NULL
+	 AND sv.version_number = (
+		SELECT MAX(v2.version_number) FROM secret_version v2
+		WHERE v2.secret_id = s.id AND v2.state = ?)`
+	args := []any{string(StateEnabled), string(StateEnabled)}
+
+	if filter.EnvNamed {
+		query += " AND s.env_name IS NOT NULL"
+	}
+
+	if filter.Prefix != "" {
+		// Exact, case-sensitive prefix. See summaryQuery for why LIKE
+		// is avoided. The prefix is bound twice.
+		query += " AND substr(s.name, 1, length(?)) = ?"
+
+		args = append(args, filter.Prefix, filter.Prefix)
+	}
+
+	return query + " ORDER BY s.name", args
+}
+
+// Entries returns the newest enabled version of every non-deleted
+// secret matching filter, ordered by name.
+func (v *Vault) Entries(filter EntryFilter) ([]Entry, error) {
+	query, args := entriesQuery(filter)
+
+	rows, err := v.handle.QueryContext(context.Background(), query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("env entries: %w", err)
+		return nil, fmt.Errorf("batch entries: %w", err)
 	}
 
 	defer func() { _ = rows.Close() }()
 
-	var entries []EnvEntry
+	var entries []Entry
 
 	for rows.Next() {
 		var (
-			entry     EnvEntry
+			entry     Entry
+			envName   sql.NullString
 			expiresAt sql.NullString
 		)
 
-		if err := rows.Scan(&entry.Name, &entry.EnvName, &expiresAt, &entry.Version, &entry.Envelope); err != nil {
-			return nil, fmt.Errorf("scan env entry: %w", err)
+		if err := rows.Scan(&entry.Name, &envName, &expiresAt, &entry.Version, &entry.Envelope); err != nil {
+			return nil, fmt.Errorf("scan batch entry: %w", err)
 		}
+
+		entry.EnvName = envName.String
 
 		if expiry, ok, err := parseNullableTime(expiresAt); err != nil {
 			return nil, err
@@ -583,7 +646,7 @@ func (v *Vault) EnvEntries() ([]EnvEntry, error) {
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("env entries: %w", err)
+		return nil, fmt.Errorf("batch entries: %w", err)
 	}
 
 	return entries, nil
@@ -635,6 +698,16 @@ func (v *Vault) Rekey(newRecipient string, reseal Resealer) (int64, error) {
 	if err := txn.Commit(); err != nil {
 		return 0, fmt.Errorf("commit rekey: %w", err)
 	}
+
+	// Flush the WAL so envelopes sealed to the old recipient do not
+	// survive in write-ahead frames after rotation. This is best
+	// effort on purpose: the rekey is already committed, and the
+	// caller treats any error from Rekey as "the vault is unchanged"
+	// and discards the freshly staged new identity. Returning a
+	// checkpoint error here would destroy the only key that can read
+	// the re-encrypted vault. An unscrubbed WAL frame, cleaned up by
+	// the next checkpoint, is the lesser evil than a locked vault.
+	_ = v.checkpoint()
 
 	return int64(len(live)), nil
 }

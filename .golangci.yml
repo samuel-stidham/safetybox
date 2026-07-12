@@ -131,10 +131,12 @@ linters:
           - prealloc
           - unparam
           - varnamelen
-      # G304 only. Tests build file paths from t.TempDir on every
-      # line. The rest of gosec still applies to tests.
+      # G301, G302, G304 only. Tests build file paths from t.TempDir
+      # and create fixtures with deliberately chosen (often loose)
+      # permissions to exercise the permission checks. The rest of
+      # gosec still applies to tests, including G101.
       - path: _test\.go
-        text: "G304"
+        text: "(G301|G302|G304)"
         linters:
           - gosec
 
