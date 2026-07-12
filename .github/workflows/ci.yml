@@ -1,0 +1,126 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "0"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # make build derives the version from git describe.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Build
+        run: make build
+
+      - name: Install lint tools
+        run: |
+          go install mvdan.cc/gofumpt@v0.10.0
+          go install github.com/daixiang0/gci@v0.13.7
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+
+      - name: Lint
+        run: |
+          make lint
+          git diff --exit-code
+
+      - name: Test
+        run: make test
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Tags are cut only from main commits that passed every gate above.
+  # feat -> minor, fix -> patch, BREAKING CHANGE -> major. Commits
+  # with no release-worthy type produce no tag and no release.
+  tag:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build, gitleaks]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      new_tag: ${{ steps.bump.outputs.new_tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Bump version from conventional commits
+        id: bump
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tag_prefix: v
+          default_bump: false
+
+  # Runs in the same workflow because tags created with GITHUB_TOKEN
+  # do not trigger new workflow runs. Manually pushed v* tags take
+  # the github.ref branch of the conditions.
+  release:
+    if: >-
+      ${{ !cancelled() &&
+          needs.build.result == 'success' &&
+          needs.gitleaks.result == 'success' &&
+          (startsWith(github.ref, 'refs/tags/v') || needs.tag.outputs.new_tag != '') }}
+    needs: [build, gitleaks, tag]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || needs.tag.outputs.new_tag }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      # The release body is the CHANGELOG.md section for this tag.
+      # A missing section fails the release on purpose: every
+      # release must have curated notes.
+      - name: Extract release notes from CHANGELOG.md
+        env:
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || needs.tag.outputs.new_tag }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          awk -v ver="$version" '
+            $0 ~ "^## \\[" ver "\\]" { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md" || {
+            echo "CHANGELOG.md has no section for $version" >&2
+            exit 1
+          }
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --clean --release-notes ${{ runner.temp }}/release-notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

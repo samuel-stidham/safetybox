@@ -1,0 +1,48 @@
+version: 2
+
+project_name: safetybox
+
+before:
+  hooks:
+    - go mod verify
+
+builds:
+  - id: safetybox
+    main: .
+    binary: safetybox
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+# Release notes come from CHANGELOG.md. CI extracts the section for
+# the tag and passes it via --release-notes, so the generated
+# commit-list changelog is disabled.
+changelog:
+  disable: true
+
+release:
+  mode: replace

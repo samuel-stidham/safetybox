@@ -1,0 +1,159 @@
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  default: none
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - canonicalheader
+    - containedctx
+    - contextcheck
+    - copyloopvar
+    - cyclop
+    - decorder
+    - dogsled
+    - dupl
+    - dupword
+    - durationcheck
+    - errcheck
+    - errchkjson
+    - errname
+    - errorlint
+    - exhaustive
+    - fatcontext
+    - forbidigo
+    - forcetypeassert
+    - funlen
+    - ginkgolinter
+    - gocheckcompilerdirectives
+    - gochecknoglobals
+    - gochecknoinits
+    - gochecksumtype
+    - gocognit
+    - goconst
+    - gocritic
+    - gocyclo
+    - godot
+    - godox
+    - goheader
+    - gomoddirectives
+    - gomodguard_v2
+    - goprintffuncname
+    - gosec
+    - gosmopolitan
+    - govet
+    - grouper
+    - importas
+    - ineffassign
+    - interfacebloat
+    - ireturn
+    - lll
+    - loggercheck
+    - maintidx
+    - makezero
+    - mirror
+    - misspell
+    - mnd
+    - musttag
+    - nakedret
+    - nestif
+    - nilerr
+    - nilnil
+    - nlreturn
+    - noctx
+    - nolintlint
+    - nonamedreturns
+    - nosprintfhostport
+    - paralleltest
+    - perfsprint
+    - prealloc
+    - predeclared
+    - promlinter
+    - protogetter
+    - reassign
+    - revive
+    - rowserrcheck
+    - sloglint
+    - spancheck
+    - sqlclosecheck
+    - staticcheck
+    - tagalign
+    - tagliatelle
+    - testableexamples
+    - testifylint
+    - testpackage
+    - thelper
+    - tparallel
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - usetesting
+    - varnamelen
+    - wastedassign
+    - whitespace
+    - wrapcheck
+    - wsl_v5
+    - zerologlint
+  settings:
+    goconst:
+      ignore-tests: true
+    paralleltest:
+      ignore-missing: true
+      ignore-missing-subtests: true
+    varnamelen:
+      ignore-decls:
+        - w io.Writer
+        - r io.Reader
+        - t *testing.T
+        - db *sql.DB
+        - tx *sql.Tx
+        - i int
+        - ok bool
+  exclusions:
+    # Test-file exclusions are justified linter by linter in
+    # docs/linting.md. Add nothing here without a matching entry.
+    rules:
+      - path: _test\.go
+        linters:
+          - dogsled
+          - dupl
+          - errorlint
+          - funlen
+          - goconst
+          - mnd
+          - prealloc
+          - unparam
+          - varnamelen
+      # G304 only. Tests build file paths from t.TempDir on every
+      # line. The rest of gosec still applies to tests.
+      - path: _test\.go
+        text: "G304"
+        linters:
+          - gosec
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+  settings:
+    gci:
+      sections:
+        - standard
+        - prefix(github.com/samuel-stidham/safetybox)
+        - default
+      # Without this, gci ignores the section order above and puts
+      # the prefix group last, undoing the Makefile's gci target.
+      custom-order: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -1,0 +1,47 @@
+// Package logging configures the process-wide structured logger.
+//
+// Log operations, never operand values. Secret plaintext must never
+// reach a log record. secret.Value enforces this via LogValue,
+// but call sites still must not pass raw byte slices.
+package logging
+
+import (
+	"io"
+	"log/slog"
+	"os"
+)
+
+// Options control how the logger is built.
+type Options struct {
+	// Verbose lowers the level from Warn to Debug.
+	Verbose bool
+	// JSON switches the handler from text to JSON.
+	JSON bool
+}
+
+// New builds a logger writing to w.
+func New(w io.Writer, opts Options) *slog.Logger {
+	level := slog.LevelWarn
+	if opts.Verbose {
+		level = slog.LevelDebug
+	}
+
+	handlerOpts := &slog.HandlerOptions{Level: level}
+
+	var handler slog.Handler
+	if opts.JSON {
+		handler = slog.NewJSONHandler(w, handlerOpts)
+	} else {
+		handler = slog.NewTextHandler(w, handlerOpts)
+	}
+
+	return slog.New(handler)
+}
+
+// Setup builds a logger on stderr and installs it as the slog default.
+func Setup(opts Options) *slog.Logger {
+	logger := New(os.Stderr, opts)
+	slog.SetDefault(logger)
+
+	return logger
+}
