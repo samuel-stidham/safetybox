@@ -96,7 +96,52 @@ func completeInterruptedRekey(identityPath string) error {
 	}
 
 	if err := os.Rename(staged, identityPath); err != nil {
+		// Two invocations can race this heal. If the identity now
+		// exists, the other one promoted the staged file first and
+		// this invocation can simply proceed.
+		if _, statErr := os.Stat(identityPath); statErr == nil {
+			return nil
+		}
+
 		return fmt.Errorf("complete interrupted rekey (your new identity is at %s): %w", staged, err)
+	}
+
+	return nil
+}
+
+// forEachDecrypted unlocks the identity once and opens every entry's
+// envelope with it, calling fn with the entry and its plaintext. It
+// is the single batch decrypt path, shared by exec and reveal, so a
+// batch pays the passphrase KDF exactly one time and both verbs stay
+// on one address-verification and expiry-warning behavior.
+func forEachDecrypted(cobraCmd *cobra.Command, opts *options, entries []vault.Entry,
+	visit func(entry vault.Entry, expired bool, value secret.Value) error,
+) error {
+	key, cleanup, err := loadIdentity(cobraCmd, opts)
+	if err != nil {
+		return err
+	}
+
+	defer cleanup()
+
+	now := nowUTC()
+
+	for _, entry := range entries {
+		address := vault.CanonicalAddress(entry.Name, entry.Version)
+
+		value, err := envelope.Open(key, address, entry.Envelope)
+		if err != nil {
+			return fmt.Errorf("open %s: %w", entry.Name, userHint(err))
+		}
+
+		expired := entry.Expired(now)
+		if expired {
+			warnExpired(cobraCmd, entry.Name, entry.ExpiresAt)
+		}
+
+		if err := visit(entry, expired, value); err != nil {
+			return err
+		}
 	}
 
 	return nil

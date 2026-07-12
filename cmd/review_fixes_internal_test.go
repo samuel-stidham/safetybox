@@ -120,3 +120,83 @@ func TestReadHealsInterruptedRekey(t *testing.T) {
 	_, err := os.Stat(fixture.identityPath)
 	require.NoError(t, err, "the staged identity must be promoted into place")
 }
+
+// TestRekeyRefusesWhenVaultNotOnIdentity simulates the crash window
+// where a rekey committed the vault to the staged key but died before
+// the identity swap. A re-run must refuse and point at the staged
+// key, never delete it.
+func TestRekeyRefusesWhenVaultNotOnIdentity(t *testing.T) {
+	fixture := newCLIFixture(t)
+	fixture.runOK(fakeValueOne+"\n", "set", "api/one")
+
+	// A real rekey moves the old key to .bak and promotes the new one.
+	fixture.runOK("", "rekey")
+
+	// Reconstruct the crash state: vault on the new key, identity.age
+	// back to the old key, new key stranded at the staged sibling.
+	require.NoError(t, os.Rename(fixture.identityPath, fixture.identityPath+".new"))
+	require.NoError(t, os.Rename(fixture.identityPath+".bak", fixture.identityPath))
+
+	_, _, err := fixture.run("", "rekey")
+	require.ErrorContains(t, err, "not encrypted to the identity")
+
+	_, statErr := os.Stat(fixture.identityPath + ".new")
+	require.NoError(t, statErr, "the staged live key must never be deleted")
+
+	// Read verbs in this state must hint at the interrupted rekey.
+	_, _, err = fixture.run("", "reveal", "api/one")
+	require.ErrorContains(t, err, "interrupted rekey")
+}
+
+// TestPasswdHealsInterruptedRekey covers the heal gap: passwd used to
+// bypass completeInterruptedRekey and hint at init.
+func TestPasswdHealsInterruptedRekey(t *testing.T) {
+	fixture := newCLIFixture(t)
+	fixture.runOK(fakeValueOne+"\n", "set", "api/one")
+
+	// Simulate a crash mid-swap: identity.age gone, .new present.
+	require.NoError(t, os.Rename(fixture.identityPath, fixture.identityPath+".new"))
+
+	newPassphraseFile := filepath.Join(t.TempDir(), "next")
+	require.NoError(t, os.WriteFile(newPassphraseFile, []byte("fake-next-passphrase\n"), 0o600))
+
+	fixture.runOK("", "passwd", "--new-passphrase-file", newPassphraseFile)
+
+	_, err := os.Stat(fixture.identityPath)
+	require.NoError(t, err, "passwd must promote the staged identity before loading")
+}
+
+// TestRevealExplicitNameWithoutEnvNameFailsShellFormat pins the
+// fails-loudly contract: an explicitly named secret that cannot
+// become an assignment fails the batch instead of emitting nothing
+// with exit 0.
+func TestRevealExplicitNameWithoutEnvNameFailsShellFormat(t *testing.T) {
+	fixture := newCLIFixture(t)
+	fixture.runOK(fakeValueOne+"\n", "set", "api/one")
+
+	stdout, _, err := fixture.run("", "reveal", "api/one", "--format", "sh")
+	require.ErrorContains(t, err, "has no env name")
+	assert.Empty(t, stdout, "nothing may be emitted when an explicit name fails the batch")
+}
+
+// TestRevealWarnsOnDuplicateEnvNames pins the collision warning: the
+// last assignment wins in the sourcing shell, so the override must be
+// called out on stderr.
+func TestRevealWarnsOnDuplicateEnvNames(t *testing.T) {
+	fixture := newCLIFixture(t)
+	fixture.runOK(fakeValueOne+"\n", "set", "api/one", "--env-name", "FAKE_SHARED")
+	fixture.runOK(fakeValueTwo+"\n", "set", "api/two", "--env-name", "FAKE_SHARED")
+
+	stdout, stderr := fixture.runOK("", "reveal", "--env", "--format", "sh")
+	assert.Contains(t, stderr, "overrides")
+	assert.Contains(t, stdout, fakeValueTwo, "the later assignment still wins")
+}
+
+// TestRevealRejectsJSONFlagWithShellFormat pins the flag conflict:
+// --json silently did nothing beside --format sh.
+func TestRevealRejectsJSONFlagWithShellFormat(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	_, _, err := fixture.run("", "reveal", "--env", "--format", "sh", "--json")
+	require.ErrorContains(t, err, "--json applies to json output")
+}

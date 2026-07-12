@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -381,28 +382,47 @@ func (v *Vault) Meta(name string) (SecretMeta, []VersionMeta, error) {
 	return meta, versions, nil
 }
 
-// summaryQuery matches by exact, case-sensitive prefix. LIKE is not
-// used because it treats `_` and `%` in a name as wildcards and folds
-// ASCII case, which would over-match and, through reveal --prefix,
-// disclose secrets the caller did not select. The prefix is bound
-// twice: once for its length, once for the compared substring. An
-// empty prefix yields substr(s.name, 1, 0) = ” and matches everything.
 const summaryQuery = `SELECT s.id, s.name, s.env_name, s.created_at, s.updated_at, s.deleted_at, s.expires_at,
 	COALESCE(MAX(sv.version_number), 0)
 	FROM secret s LEFT JOIN secret_version sv ON sv.secret_id = s.id
-	WHERE s.deleted_at IS NULL AND substr(s.name, 1, length(?)) = ?`
+	WHERE s.deleted_at IS NULL`
 
-// List returns non-deleted secrets whose name starts with prefix.
-// An empty prefix lists everything.
+// prefixClause matches a name that IS the prefix or lives under it as
+// a whole segment, so "projects/app" never selects the sibling
+// "projects/app-legacy". The comparison is exact and case-sensitive.
+// LIKE is not used because it treats `_` and `%` in a name as
+// wildcards and folds ASCII case, which would over-match and, through
+// reveal --prefix, disclose secrets the caller did not select.
+const prefixClause = ` AND (s.name = ? OR substr(s.name, 1, length(?) + 1) = ? || '/')`
+
+// prefixArgs binds the prefix for prefixClause's three placeholders.
+// A trailing slash is dropped so "db/" and "db" select the same set.
+func prefixArgs(prefix string) []any {
+	trimmed := strings.TrimSuffix(prefix, "/")
+
+	return []any{trimmed, trimmed, trimmed}
+}
+
+// List returns non-deleted secrets whose name equals prefix or sits
+// under it as a whole segment. An empty prefix lists everything.
 func (v *Vault) List(prefix string) ([]Summary, error) {
-	return v.summaries(summaryQuery+" GROUP BY s.id ORDER BY s.name", prefix, prefix)
+	query := summaryQuery
+
+	var args []any
+
+	if prefix != "" {
+		query += prefixClause
+		args = prefixArgs(prefix)
+	}
+
+	return v.summaries(query+" GROUP BY s.id ORDER BY s.name", args...)
 }
 
 // Stale returns non-deleted secrets whose expiry has passed.
 func (v *Vault) Stale(now time.Time) ([]Summary, error) {
 	query := summaryQuery + " AND s.expires_at IS NOT NULL AND s.expires_at <= ? GROUP BY s.id ORDER BY s.name"
 
-	return v.summaries(query, "", "", formatTime(now))
+	return v.summaries(query, formatTime(now))
 }
 
 func (v *Vault) summaries(query string, args ...any) ([]Summary, error) {
@@ -565,19 +585,33 @@ func (v *Vault) Purge(name string) (int64, error) {
 	// effort for the same reason as rekey. The purge is already
 	// committed, so a checkpoint error must not report the committed
 	// purge as a failure. The next checkpoint reclaims the frames.
-	_ = v.checkpoint()
+	_ = v.Checkpoint()
 
 	return destroyed, nil
 }
 
-// checkpoint flushes and truncates the WAL so that content freed by a
+// Checkpoint flushes and truncates the WAL so that content freed by a
 // destructive operation cannot be recovered from write-ahead frames.
-// A single connection (SetMaxOpenConns) makes this reliable in normal
-// operation. It can still fail on genuine I/O errors, where callers
-// treat it as best effort rather than failing a committed operation.
-func (v *Vault) checkpoint() error {
-	if _, err := v.handle.ExecContext(context.Background(), "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+// The single connection (SetMaxOpenConns) rules out same-process
+// contention, but a reader in ANOTHER process can still block the
+// truncate. The pragma reports that as busy=1 with no SQL error, so
+// the result row is read rather than discarded and a blocked
+// checkpoint surfaces as ErrCheckpointBlocked. Purge and Rekey treat
+// any failure as best effort because the destructive operation is
+// already committed. Callers that must know the scrub happened, such
+// as the purge and rekey verbs warning the user, call this again and
+// check the error.
+func (v *Vault) Checkpoint() error {
+	var busy, logFrames, checkpointed int64
+
+	err := v.handle.QueryRowContext(context.Background(),
+		"PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logFrames, &checkpointed)
+	if err != nil {
 		return fmt.Errorf("checkpoint wal: %w", err)
+	}
+
+	if busy != 0 {
+		return fmt.Errorf("checkpoint wal: %w", ErrCheckpointBlocked)
 	}
 
 	return nil
@@ -599,11 +633,9 @@ func entriesQuery(filter EntryFilter) (string, []any) {
 	}
 
 	if filter.Prefix != "" {
-		// Exact, case-sensitive prefix. See summaryQuery for why LIKE
-		// is avoided. The prefix is bound twice.
-		query += " AND substr(s.name, 1, length(?)) = ?"
+		query += prefixClause
 
-		args = append(args, filter.Prefix, filter.Prefix)
+		args = append(args, prefixArgs(filter.Prefix)...)
 	}
 
 	return query + " ORDER BY s.name", args
@@ -707,7 +739,7 @@ func (v *Vault) Rekey(newRecipient string, reseal Resealer) (int64, error) {
 	// checkpoint error here would destroy the only key that can read
 	// the re-encrypted vault. An unscrubbed WAL frame, cleaned up by
 	// the next checkpoint, is the lesser evil than a locked vault.
-	_ = v.checkpoint()
+	_ = v.Checkpoint()
 
 	return int64(len(live)), nil
 }

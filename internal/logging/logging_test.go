@@ -36,7 +36,7 @@ func TestSecretValueRedactedThroughHandler(t *testing.T) {
 // denylist: a raw string logged under a sensitive key is redacted
 // even though a plain string has no LogValue of its own.
 func TestSensitiveKeyBackstopRedactsRawString(t *testing.T) {
-	for _, key := range []string{"passphrase", "value", "plaintext", "identity", "secret"} {
+	for _, key := range []string{"passphrase", "value", "plaintext", "identity", "secret", "password", "token"} {
 		var buf bytes.Buffer
 
 		logging.New(&buf, logging.Options{}).Warn("probe", key, fakePlaintext)

@@ -174,10 +174,11 @@ func openHandle(path string) (*sql.DB, error) {
 
 	// One connection per vault. This is a single-user CLI, so nothing
 	// is lost to serialization, and it guarantees the post-purge and
-	// post-rekey wal_checkpoint(TRUNCATE) runs on the only connection,
-	// with no other pooled connection pinning a WAL frame it cannot
-	// then reclaim. That is what makes the secure-delete scrub of the
-	// write-ahead log reliable rather than best effort.
+	// post-rekey wal_checkpoint(TRUNCATE) runs on the only connection
+	// in THIS process, with no pooled sibling pinning a WAL frame. A
+	// concurrent safetybox process can still hold a read snapshot that
+	// blocks the truncate. Checkpoint reports that as
+	// ErrCheckpointBlocked so the purge and rekey verbs can warn.
 	handle.SetMaxOpenConns(1)
 
 	if err := handle.PingContext(context.Background()); err != nil {

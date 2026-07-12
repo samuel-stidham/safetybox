@@ -3,6 +3,8 @@ package cmd
 import (
 	"errors"
 
+	"github.com/samuel-stidham/safetybox/internal/vault"
+
 	"github.com/spf13/cobra"
 )
 
@@ -49,5 +51,20 @@ func runPurge(cobraCmd *cobra.Command, opts *options, name string) error {
 		return userHint(err)
 	}
 
+	warnIfCheckpointBlocked(cobraCmd, openedVault)
+
 	return printJSON(cobraCmd, opts, purgeOutput{Name: name, Destroyed: destroyed, Result: "purged"})
+}
+
+// warnIfCheckpointBlocked retries the WAL scrub and warns when a
+// concurrent reader is pinning the log. The destructive operation is
+// already committed, so this is advice, never a failure: the erased
+// bytes stay recoverable from WAL frames until a later checkpoint
+// truncates them.
+func warnIfCheckpointBlocked(cobraCmd *cobra.Command, openedVault *vault.Vault) {
+	if err := openedVault.Checkpoint(); err != nil {
+		printStderr(cobraCmd,
+			"warning: could not scrub the write-ahead log, old ciphertext may linger "+
+				"until the next checkpoint (is another safetybox running?)\n")
+	}
 }

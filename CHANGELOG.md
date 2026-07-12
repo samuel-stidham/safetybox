@@ -4,6 +4,77 @@ All notable changes to safetybox are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-07-12
+
+### Added
+
+- A version that survives `go install`. Binaries built without the
+  ldflags injection now fall back to the module version in the build
+  info, so a tagged install reports its tag instead of `dev`.
+- Every build path reports the same v-prefixed version. goreleaser
+  used to strip the v that git describe and the build info keep, so a
+  release archive said 1.2.0 while every other install said v1.2.0.
+  All paths now agree on v1.2.0.
+- A SAFETYBOX banner and the version at the top of the root help, so
+  running the bare command shows what is installed.
+- `safetybox --version` continues to print the plain version line.
+
+### Security
+
+- Rekey can no longer destroy the only working key. A rekey that
+  committed the vault to its staged key and crashed before the
+  identity swap used to leave a trap: the next rekey deleted the
+  staged file as stale and every secret was lost forever. Rekey now
+  compares the vault's stored recipient against the loaded identity
+  before touching anything, refuses when they differ, and names the
+  staged file as the live key with recovery steps. Read verbs in that
+  state now hint at the interrupted rekey instead of failing with a
+  bare decrypt error.
+- The staged identity and the rekey swap are now durable. `Write`
+  fsyncs the containing directory after creating a file and the
+  post-rekey rename pair is followed by a directory fsync, so a power
+  loss can no longer separate the vault from its key.
+- `reveal --prefix` and `list` now match whole name segments.
+  `projects/myapp` no longer selects the sibling
+  `projects/myapp-legacy`, which a raw leading-substring match would
+  decrypt and print.
+- A blocked WAL scrub is now detected and reported. The checkpoint
+  after `purge` and `rekey` reads the pragma's busy result instead of
+  discarding it, and both verbs warn on stderr when another process
+  pinned the log, instead of silently claiming the old ciphertext was
+  destroyed.
+- The logger's redaction backstop also covers `password` and `token`
+  keys.
+
+### Fixed
+
+- `passwd` now heals an interrupted rekey like every other verb,
+  instead of reporting the identity missing and suggesting `init`.
+- A failed identity write now removes its partial file, and `passwd`
+  clears a stale temp sibling left by a crash, so neither wedges every
+  retry on "already exists".
+- Two invocations racing the interrupted-rekey heal no longer make
+  the loser fail after the winner already fixed things.
+- A missing identity in a loose directory reports "run init first"
+  before complaining about directory permissions.
+- A `passwd` failure after the new passphrase is already live now
+  says so, instead of implying the old passphrase still works.
+- `reveal <name> --format sh` fails loudly when the named secret has
+  no usable env name, instead of exiting 0 with empty output under an
+  eval. Filter selections still skip with a warning.
+- `reveal --format` and `exec` warn when two secrets share an env
+  name, since the later value silently wins.
+- `exec` now skips, with a warning, legacy env names that are not
+  valid variable names, instead of injecting malformed entries into
+  the child environment.
+- `reveal` rejects `--json` combined with `--format sh|fish` instead
+  of silently ignoring it, and warns when a value is not valid UTF-8
+  and JSON output cannot carry it byte for byte.
+- The `set` value prompt no longer reports its errors as passphrase
+  errors.
+- `exec` and `reveal` now share one batch decrypt path with a single
+  expiry rule, so the two verbs cannot drift apart.
+
 ## [1.1.0] - 2026-07-12
 
 ### Added
@@ -143,6 +214,7 @@ and there is no plaintext storage mode.
   command, configuration, the security model, architecture, and
   development.
 
+[1.2.0]: https://github.com/samuel-stidham/safetybox/releases/tag/v1.2.0
 [1.1.0]: https://github.com/samuel-stidham/safetybox/releases/tag/v1.1.0
 [1.0.1]: https://github.com/samuel-stidham/safetybox/releases/tag/v1.0.1
 [1.0.0]: https://github.com/samuel-stidham/safetybox/releases/tag/v1.0.0

@@ -33,6 +33,13 @@ func runPasswd(cobraCmd *cobra.Command, opts *options, newPassphraseFile string)
 		return err
 	}
 
+	// Heal a rekey that crashed mid-swap, like every other verb that
+	// loads the identity. Without this, passwd reports the identity
+	// missing and hints at init while the live key sits at .new.
+	if err := completeInterruptedRekey(identityPath); err != nil {
+		return err
+	}
+
 	current, err := readPassphrase(cobraCmd, opts.passphraseFile, "Current passphrase: ")
 	if err != nil {
 		return err

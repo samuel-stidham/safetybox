@@ -148,3 +148,32 @@ func TestReplaceSwapsPassphrase(t *testing.T) {
 
 	assert.Equal(t, key.Recipient().String(), loaded.Recipient().String())
 }
+
+func TestReplaceRemovesStaleTemp(t *testing.T) {
+	path := identityPath(t)
+	key := newKey(t)
+
+	require.NoError(t, identity.Write(path, key, []byte(fakePassphrase)))
+
+	// A crashed earlier Replace leaves a stale temp sibling. The next
+	// Replace must clear it instead of wedging on "already exists".
+	require.NoError(t, os.WriteFile(path+".tmp", []byte("stale"), 0o600))
+
+	require.NoError(t, identity.Replace(path, key, []byte(fakePassphrase)))
+
+	_, _, err := identity.Load(path, []byte(fakePassphrase))
+	require.NoError(t, err)
+
+	_, err = os.Stat(path + ".tmp")
+	require.ErrorIs(t, err, os.ErrNotExist, "the temp file must be gone after a successful replace")
+}
+
+func TestLoadMissingIdentityReportsNotFoundBeforeDirPerms(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "config")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	// A loose but empty directory must report the missing identity,
+	// so the user is pointed at init rather than at chmod.
+	_, _, err := identity.Load(filepath.Join(dir, "identity.age"), []byte(fakePassphrase))
+	require.ErrorIs(t, err, identity.ErrNotFound)
+}

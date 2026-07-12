@@ -20,7 +20,7 @@ func readPassphrase(cobraCmd *cobra.Command, passphraseFile, label string) ([]by
 		return passphraseFromFile(passphraseFile)
 	}
 
-	return promptOnce(cobraCmd, label)
+	return promptOnce(cobraCmd, label, "passphrase")
 }
 
 // readNewPassphrase returns a passphrase for new key material, from a
@@ -30,12 +30,12 @@ func readNewPassphrase(cobraCmd *cobra.Command, passphraseFile, label string) ([
 		return passphraseFromFile(passphraseFile)
 	}
 
-	passphrase, err := promptOnce(cobraCmd, label)
+	passphrase, err := promptOnce(cobraCmd, label, "passphrase")
 	if err != nil {
 		return nil, err
 	}
 
-	confirmation, err := promptOnce(cobraCmd, "Confirm passphrase: ")
+	confirmation, err := promptOnce(cobraCmd, "Confirm passphrase: ", "passphrase")
 	if err != nil {
 		zeroBytes(passphrase)
 
@@ -95,7 +95,9 @@ func passphraseFromFile(passphraseFile string) ([]byte, error) {
 	return passphrase, nil
 }
 
-func promptOnce(cobraCmd *cobra.Command, label string) ([]byte, error) {
+// promptOnce reads one no-echo line. noun names what is being read,
+// so the set value prompt does not error about a passphrase.
+func promptOnce(cobraCmd *cobra.Command, label, noun string) ([]byte, error) {
 	stdinFd := int(os.Stdin.Fd())
 	if !term.IsTerminal(stdinFd) {
 		return nil, errors.New("stdin is not a terminal: use --passphrase-file")
@@ -103,19 +105,19 @@ func promptOnce(cobraCmd *cobra.Command, label string) ([]byte, error) {
 
 	printStderr(cobraCmd, label)
 
-	passphrase, err := term.ReadPassword(stdinFd)
+	entered, err := term.ReadPassword(stdinFd)
 
 	printStderr(cobraCmd, "\n")
 
 	if err != nil {
-		return nil, fmt.Errorf("read passphrase: %w", err)
+		return nil, fmt.Errorf("read %s: %w", noun, err)
 	}
 
-	if len(passphrase) == 0 {
-		return nil, errors.New("passphrase must not be empty")
+	if len(entered) == 0 {
+		return nil, fmt.Errorf("%s must not be empty", noun)
 	}
 
-	return passphrase, nil
+	return entered, nil
 }
 
 func zeroBytes(buf []byte) {
