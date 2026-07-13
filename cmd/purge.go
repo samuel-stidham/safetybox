@@ -56,15 +56,26 @@ func runPurge(cobraCmd *cobra.Command, opts *options, name string) error {
 	return printJSON(cobraCmd, opts, purgeOutput{Name: name, Destroyed: destroyed, Result: "purged"})
 }
 
-// warnIfCheckpointBlocked retries the WAL scrub and warns when a
-// concurrent reader is pinning the log. The destructive operation is
-// already committed, so this is advice, never a failure: the erased
-// bytes stay recoverable from WAL frames until a later checkpoint
-// truncates them.
+// warnIfCheckpointBlocked retries the WAL scrub and warns when it
+// cannot happen. A blocked checkpoint gets the concurrent-reader
+// explanation. Any other failure prints the real error, so an I/O or
+// permission problem is not misattributed to another process. The
+// destructive operation is already committed, so this is advice,
+// never a failure: the erased bytes stay recoverable from WAL frames
+// until a later checkpoint truncates them.
 func warnIfCheckpointBlocked(cobraCmd *cobra.Command, openedVault *vault.Vault) {
-	if err := openedVault.Checkpoint(); err != nil {
-		printStderr(cobraCmd,
-			"warning: could not scrub the write-ahead log, old ciphertext may linger "+
-				"until the next checkpoint (is another safetybox running?)\n")
+	err := openedVault.Checkpoint()
+	if err == nil {
+		return
 	}
+
+	if errors.Is(err, vault.ErrCheckpointBlocked) {
+		printStderr(cobraCmd,
+			"warning: another safetybox process is reading the vault, old ciphertext "+
+				"may linger in the write-ahead log until the next checkpoint\n")
+
+		return
+	}
+
+	printStderr(cobraCmd, "warning: could not scrub the write-ahead log: "+err.Error()+"\n")
 }

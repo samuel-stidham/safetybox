@@ -128,12 +128,19 @@ func ensureVaultOnIdentity(opts *options, oldKey *age.X25519Identity, identityPa
 		return nil
 	}
 
-	if _, statErr := os.Stat(stagedPath); statErr == nil {
+	_, statErr := os.Stat(stagedPath)
+
+	switch {
+	case statErr == nil:
 		return fmt.Errorf(
 			"the vault is not encrypted to the identity at %s: a previous rekey likely crashed after re-encrypting the vault, "+
 				"and %s is the live key: back it up, then move it to %s and retry",
 			identityPath, stagedPath, identityPath,
 		)
+	case !errors.Is(statErr, fs.ErrNotExist):
+		// A staged key that cannot even be inspected must not be
+		// reported as absent. The refusal has to name the real problem.
+		return fmt.Errorf("stat staged identity %s: %w", stagedPath, statErr)
 	}
 
 	return fmt.Errorf("the vault is not encrypted to the identity at %s: refusing to rekey", identityPath)

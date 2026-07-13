@@ -27,9 +27,10 @@ versions follow [Semantic Versioning](https://semver.org/).
   staged file as stale and every secret was lost forever. Rekey now
   compares the vault's stored recipient against the loaded identity
   before touching anything, refuses when they differ, and names the
-  staged file as the live key with recovery steps. Read verbs in that
-  state now hint at the interrupted rekey instead of failing with a
-  bare decrypt error.
+  staged file as the live key with recovery steps. A staged key that
+  cannot be inspected is reported as its own error rather than as
+  absent. Read verbs in that state now hint at the interrupted rekey
+  instead of failing with a bare decrypt error.
 - The staged identity and the rekey swap are now durable. `Write`
   fsyncs the containing directory after creating a file and the
   post-rekey rename pair is followed by a directory fsync, so a power
@@ -42,7 +43,10 @@ versions follow [Semantic Versioning](https://semver.org/).
   after `purge` and `rekey` reads the pragma's busy result instead of
   discarding it, and both verbs warn on stderr when another process
   pinned the log, instead of silently claiming the old ciphertext was
-  destroyed.
+  destroyed. The warning names the concurrent reader only when the
+  checkpoint was actually blocked. Any other failure prints the real
+  error, so an I/O or permission problem is not misattributed to
+  another process.
 - The logger's redaction backstop also covers `password` and `token`
   keys.
 
