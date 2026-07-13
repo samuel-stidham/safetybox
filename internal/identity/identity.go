@@ -5,10 +5,11 @@
 // 0600 inside a 0700 directory, and Load refuses group- or
 // world-readable files, and a loose containing directory, the way ssh
 // does. The decrypted file bytes pass through a memguard LockedBuffer
-// that is wiped by the returned cleanup function. The parsed key
-// itself is an *age.X25519Identity, which age holds in an ordinary Go
-// slice on the heap for the duration of one invocation. That heap
-// copy is the practical limit of the in-memory protection here.
+// that is wiped by the returned cleanup function. Parsing makes one
+// interim heap string of the key line, and the parsed key itself is
+// an *age.X25519Identity, which age holds in an ordinary Go slice on
+// the heap for the duration of one invocation. Those heap copies are
+// the practical limit of the in-memory protection here.
 package identity
 
 import (
@@ -38,10 +39,6 @@ const (
 func Load(path string, passphrase []byte) (*age.X25519Identity, func(), error) {
 	cleaned := filepath.Clean(path)
 
-	if err := checkDirPerms(filepath.Dir(cleaned)); err != nil {
-		return nil, nil, err
-	}
-
 	// Open once and stat the descriptor, so the permission check and
 	// the read provably see the same file even if the path is swapped.
 	file, err := os.Open(cleaned)
@@ -54,6 +51,13 @@ func Load(path string, passphrase []byte) (*age.X25519Identity, func(), error) {
 	}
 
 	defer func() { _ = file.Close() }()
+
+	// The directory check runs after the not-found check so a missing
+	// identity reports "run init first" rather than a permission
+	// complaint about a directory that holds nothing yet.
+	if err := checkDirPerms(filepath.Dir(cleaned)); err != nil {
+		return nil, nil, err
+	}
 
 	info, err := file.Stat()
 	if err != nil {
@@ -160,8 +164,12 @@ func Write(path string, key *age.X25519Identity, passphrase []byte) error {
 		return fmt.Errorf("create identity file: %w", err)
 	}
 
+	// A failure after the O_EXCL create must unlink the partial file.
+	// Leaving it would wedge every retry on "already exists" for a
+	// file that guards nothing.
 	if _, err := file.Write(sealed); err != nil {
 		_ = file.Close()
+		_ = os.Remove(cleaned)
 
 		return fmt.Errorf("write identity file: %w", err)
 	}
@@ -170,12 +178,25 @@ func Write(path string, key *age.X25519Identity, passphrase []byte) error {
 	// partial identity, which for the sole private key is data loss.
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
+		_ = os.Remove(cleaned)
 
 		return fmt.Errorf("sync identity file: %w", err)
 	}
 
 	if err := file.Close(); err != nil {
+		_ = os.Remove(cleaned)
+
 		return fmt.Errorf("write identity file: %w", err)
+	}
+
+	// fsync the directory so the new file's entry is durable. The
+	// staged .new that rekey writes must exist on disk before the
+	// vault re-encrypts, or a power loss could commit the vault to a
+	// key whose file never made it to disk.
+	if err := SyncDir(dir); err != nil {
+		_ = os.Remove(cleaned)
+
+		return err
 	}
 
 	return nil
@@ -189,6 +210,14 @@ func Replace(path string, key *age.X25519Identity, passphrase []byte) error {
 	cleaned := filepath.Clean(path)
 	temp := cleaned + ".tmp"
 
+	// A crash between an earlier Write and its rename leaves a stale
+	// temp that would wedge this Write on ErrExists forever. The temp
+	// is always a transient artifact while the live identity file
+	// still exists, so removing a leftover is safe.
+	if err := os.Remove(temp); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove stale identity temp %s: %w", temp, err)
+	}
+
 	if err := Write(temp, key, passphrase); err != nil {
 		return err
 	}
@@ -201,17 +230,21 @@ func Replace(path string, key *age.X25519Identity, passphrase []byte) error {
 
 	// fsync the directory so the rename itself is durable. Without it,
 	// a crash can commit the rename's data but not the directory entry,
-	// leaving the sole private key missing.
-	if err := syncDir(filepath.Dir(cleaned)); err != nil {
-		return err
+	// leaving the sole private key missing. The rename above already
+	// succeeded, so on failure the error must say the new material is
+	// in effect, or the caller retries with credentials that no longer
+	// work.
+	if err := SyncDir(filepath.Dir(cleaned)); err != nil {
+		return fmt.Errorf("identity replaced and in effect, but not yet durable: %w", err)
 	}
 
 	return nil
 }
 
-// syncDir flushes a directory's metadata so a rename inside it
-// survives a crash.
-func syncDir(dir string) error {
+// SyncDir flushes a directory's metadata so a create or rename inside
+// it survives a crash. It is exported for the rekey identity swap,
+// which renames identity files outside this package.
+func SyncDir(dir string) error {
 	handle, err := os.Open(filepath.Clean(dir))
 	if err != nil {
 		return fmt.Errorf("open identity directory %s: %w", dir, err)

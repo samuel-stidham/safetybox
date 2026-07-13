@@ -46,9 +46,11 @@ detection.
 
 The vault file is created 0600 with WAL journaling, and SQLite gives
 the `-wal` and `-shm` siblings the same mode. The identity file is
-0600 inside a 0700 directory. Loading refuses an identity file with
-group or world permission bits, the way ssh refuses a loose private
-key.
+0600 inside a 0700 directory. Loading refuses an identity file, or a
+containing directory, with group or world permission bits, the way
+ssh refuses a loose private key. A regular file passed to
+`--passphrase-file` is held to the same check. A pipe or process
+substitution is a transient stream and is allowed.
 
 ## Key material in memory
 
@@ -63,8 +65,21 @@ debugger on your own machine.
 rekey re-encrypts every non-destroyed version inside one SQLite
 transaction, and the stored recipient updates last in that same
 transaction. There is no window where half the vault is on the new
-key. purge erases envelopes but keeps rows, so history shows a
-version existed without any way to recover its value.
+key. The new identity is staged on disk, with a directory fsync,
+before that transaction starts, so a crash can never leave
+re-encrypted envelopes without their key. Before staging anything,
+rekey verifies the vault is really encrypted to the loaded identity,
+so a rerun after an interrupted rotation can never discard the live
+staged key. Read verbs heal an interrupted swap on the next
+invocation.
+
+purge erases envelopes but keeps rows, so history shows a version
+existed without any way to recover its value. The vault runs with
+SQLite secure_delete, and purge and rekey truncate the write-ahead
+log after committing, so freed pages and WAL frames do not keep old
+ciphertext. A reader in another process can block that truncate. The
+verbs warn when it happens and the next checkpoint reclaims the
+frames.
 
 ## What safetybox does not defend against
 

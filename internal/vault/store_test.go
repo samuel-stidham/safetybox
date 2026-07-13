@@ -396,3 +396,41 @@ func TestRekeyFailureRollsBackEverything(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, beforeNewest.Envelope, afterNewest.Envelope, "envelopes must not change on failed rekey")
 }
+
+// TestEntriesPrefixStopsAtSegmentBoundary proves the prefix filter
+// selects whole name segments, so a prefix never leaks a sibling
+// hierarchy that merely shares leading characters.
+func TestEntriesPrefixStopsAtSegmentBoundary(t *testing.T) {
+	testVault := openTestVault(t)
+
+	fixtures := []string{
+		"projects/myapp", "projects/myapp/token",
+		"projects/myapp-legacy/db", "projects/myapplication/key",
+	}
+
+	for _, name := range fixtures {
+		_, err := testVault.AppendVersion(name, vault.SetOptions{}, fakeSealer(t))
+		require.NoError(t, err)
+	}
+
+	got, err := testVault.Entries(vault.EntryFilter{Prefix: "projects/myapp"})
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(got))
+	for _, entry := range got {
+		names = append(names, entry.Name)
+	}
+
+	assert.ElementsMatch(t, []string{"projects/myapp", "projects/myapp/token"}, names,
+		"a prefix must select the name itself and whole segments under it, never lexical siblings")
+
+	// A trailing slash selects the same set.
+	slashed, err := testVault.Entries(vault.EntryFilter{Prefix: "projects/myapp/"})
+	require.NoError(t, err)
+	require.Len(t, slashed, 2)
+
+	// List applies the same rule.
+	summaries, err := testVault.List("projects/myapp")
+	require.NoError(t, err)
+	require.Len(t, summaries, 2)
+}

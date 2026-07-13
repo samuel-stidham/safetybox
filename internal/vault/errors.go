@@ -20,4 +20,7 @@ var (
 	ErrSecretDeleted = errors.New("secret deleted")
 	// ErrInvalidName means the secret name breaks the name grammar.
 	ErrInvalidName = errors.New("invalid secret name")
+	// ErrCheckpointBlocked means a WAL checkpoint could not truncate
+	// the log, usually because another process holds a read snapshot.
+	ErrCheckpointBlocked = errors.New("wal checkpoint blocked")
 )

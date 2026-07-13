@@ -42,3 +42,9 @@ artifacts/
 *.db-shm
 *.age
 !**/testdata/**/*.age
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*

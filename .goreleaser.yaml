@@ -14,8 +14,12 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
+    # .Version strips the tag's leading v. Every other path reports
+    # the v-prefixed form (git describe in the Makefile, the build
+    # info fallback for go install), so restore it here and the
+    # binary says v1.2.0 no matter how it was built.
     ldflags:
-      - -s -w -X main.version={{ .Version }}
+      - -s -w -X main.version=v{{ .Version }}
     goos:
       - linux
       - darwin

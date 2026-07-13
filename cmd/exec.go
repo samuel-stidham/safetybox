@@ -6,7 +6,7 @@ import (
 	"os"
 	osexec "os/exec"
 
-	"github.com/samuel-stidham/safetybox/internal/envelope"
+	"github.com/samuel-stidham/safetybox/internal/secret"
 	"github.com/samuel-stidham/safetybox/internal/vault"
 
 	"github.com/spf13/cobra"
@@ -82,28 +82,38 @@ func buildSecretEnv(cobraCmd *cobra.Command, opts *options) ([]string, error) {
 		return env, nil
 	}
 
-	key, cleanup, err := loadIdentity(cobraCmd, opts)
-	if err != nil {
-		return nil, err
-	}
+	// Rows written before set validated env names can carry names no
+	// shell or getenv can address, or that smuggle an `=`. They are
+	// skipped with a warning, matching reveal --format. Two secrets
+	// can share an env name, and the child would silently keep only
+	// the last, so collisions warn too.
+	sourceOf := make(map[string]string, len(entries))
 
-	defer cleanup()
+	err = forEachDecrypted(cobraCmd, opts, entries, func(entry vault.Entry, _ bool, value secret.Value) error {
+		if !isShellIdentifier(entry.EnvName) {
+			printStderr(cobraCmd, fmt.Sprintf(
+				"warning: secret %s env name %q is not a valid variable name, skipped\n",
+				entry.Name, entry.EnvName,
+			))
 
-	now := nowUTC()
-
-	for _, entry := range entries {
-		address := vault.CanonicalAddress(entry.Name, entry.Version)
-
-		value, err := envelope.Open(key, address, entry.Envelope)
-		if err != nil {
-			return nil, fmt.Errorf("resolve %s: %w", entry.Name, userHint(err))
+			return nil
 		}
 
-		if entry.ExpiresAt != nil && !now.Before(*entry.ExpiresAt) {
-			warnExpired(cobraCmd, entry.Name, entry.ExpiresAt)
+		if previous, collided := sourceOf[entry.EnvName]; collided {
+			printStderr(cobraCmd, fmt.Sprintf(
+				"warning: env name %s from %s overrides the value from %s\n",
+				entry.EnvName, entry.Name, previous,
+			))
 		}
+
+		sourceOf[entry.EnvName] = entry.Name
 
 		env = append(env, entry.EnvName+"="+string(value.Expose()))
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return env, nil

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/samuel-stidham/safetybox/internal/envelope"
 	"github.com/samuel-stidham/safetybox/internal/identity"
 	"github.com/samuel-stidham/safetybox/internal/vault"
 )
@@ -26,15 +27,13 @@ func userHint(err error) error {
 		return nil
 	}
 
+	if hinted := keyMaterialHint(err); hinted != nil {
+		return hinted
+	}
+
 	switch {
-	case errors.Is(err, vault.ErrVaultNotFound), errors.Is(err, identity.ErrNotFound):
+	case errors.Is(err, vault.ErrVaultNotFound):
 		return fmt.Errorf("%w: run `safetybox init` first", err)
-	case errors.Is(err, identity.ErrDecryptFailed):
-		return fmt.Errorf("%w: check the passphrase", err)
-	case errors.Is(err, identity.ErrUnsafePermissions):
-		return fmt.Errorf("%w: run `chmod 600` on the identity file", err)
-	case errors.Is(err, identity.ErrUnsafeDirPermissions):
-		return fmt.Errorf("%w: run `chmod 700` on the identity directory", err)
 	case errors.Is(err, vault.ErrSecretDeleted):
 		return fmt.Errorf("%w: `set` a new value to revive it or `purge` it for good", err)
 	case errors.Is(err, vault.ErrVersionNotFound):
@@ -43,5 +42,29 @@ func userHint(err error) error {
 		return fmt.Errorf("%w: upgrade safetybox to open this vault", err)
 	default:
 		return err
+	}
+}
+
+// keyMaterialHint covers the identity and envelope sentinels, or
+// returns nil when err is neither.
+func keyMaterialHint(err error) error {
+	switch {
+	case errors.Is(err, identity.ErrNotFound):
+		return fmt.Errorf("%w: run `safetybox init` first", err)
+	case errors.Is(err, identity.ErrDecryptFailed):
+		return fmt.Errorf("%w: check the passphrase", err)
+	case errors.Is(err, identity.ErrUnsafePermissions):
+		return fmt.Errorf("%w: run `chmod 600` on the identity file", err)
+	case errors.Is(err, identity.ErrUnsafeDirPermissions):
+		return fmt.Errorf("%w: run `chmod 700` on the identity directory", err)
+	case errors.Is(err, identity.ErrExists):
+		return fmt.Errorf("%w: a previous run may have left a stale file, move it aside", err)
+	case errors.Is(err, envelope.ErrDecryptFailed):
+		return fmt.Errorf(
+			"%w: the identity may not match this vault, check for an interrupted rekey (a .new sibling of the identity file)",
+			err,
+		)
+	default:
+		return nil
 	}
 }

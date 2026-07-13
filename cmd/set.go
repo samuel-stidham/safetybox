@@ -63,7 +63,7 @@ func runSet(cobraCmd *cobra.Command, opts *options, name string, flags setFlags)
 		// A non-empty env name must be a valid shell identifier so that
 		// exec and reveal --format can emit it as a variable name. An
 		// empty value is the signal to clear the env name.
-		if flags.envName != "" && !shellIdentifierGrammar().MatchString(flags.envName) {
+		if flags.envName != "" && !isShellIdentifier(flags.envName) {
 			return fmt.Errorf("--env-name %q is not a valid shell identifier", flags.envName)
 		}
 
@@ -121,7 +121,7 @@ func readSecretValue(cobraCmd *cobra.Command, name string) ([]byte, error) {
 	stdinFd := int(os.Stdin.Fd())
 
 	if term.IsTerminal(stdinFd) {
-		return promptOnce(cobraCmd, fmt.Sprintf("Value for %s: ", name))
+		return promptOnce(cobraCmd, fmt.Sprintf("Value for %s: ", name), "value")
 	}
 
 	content, err := io.ReadAll(cobraCmd.InOrStdin())

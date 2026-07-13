@@ -21,6 +21,13 @@ const (
 	envIdentity = "SAFETYBOX_IDENTITY"
 )
 
+// logo is the banner shown at the top of the root help and version
+// output. It spells SAFETYBOX in block glyphs.
+const logo = ` ▗▄▄▖ ▗▄▖ ▗▄▄▄▖▗▄▄▄▖▗▄▄▄▖▗▖  ▗▖▗▄▄▖  ▗▄▖ ▗▖  ▗▖
+▐▌   ▐▌ ▐▌▐▌   ▐▌     █   ▝▚▞▘ ▐▌ ▐▌▐▌ ▐▌ ▝▚▞▘
+ ▝▀▚▖▐▛▀▜▌▐▛▀▀▘▐▛▀▀▘  █    ▐▌  ▐▛▀▚▖▐▌ ▐▌  ▐▌
+▗▄▄▞▘▐▌ ▐▌▐▌   ▐▙▄▄▖  █    ▐▌  ▐▙▄▞▘▝▚▄▞▘▗▞▘▝▚▖`
+
 // options holds the global flag values shared by every verb.
 type options struct {
 	vaultPath      string
@@ -49,9 +56,10 @@ func newRootCmd(version string) *cobra.Command {
 	opts := &options{}
 
 	root := &cobra.Command{
-		Use:     "safetybox",
-		Short:   "A single-user, versioned secrets vault",
-		Long:    "safetybox is a CLI-first secrets manager. Values are sealed in age envelopes. Metadata lives in SQLite.",
+		Use:   "safetybox",
+		Short: "A single-user, versioned secrets vault",
+		Long: logo + "\n\nsafetybox " + version + "\n\n" +
+			"safetybox is a CLI-first secrets manager. Values are sealed in age envelopes. Metadata lives in SQLite.",
 		Version: version,
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {
 			logging.Setup(logging.Options{Verbose: opts.verbose, JSON: opts.logJSON})

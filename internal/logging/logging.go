@@ -19,7 +19,7 @@ import (
 // affected.
 func redactSensitiveKeys(_ []string, attr slog.Attr) slog.Attr {
 	switch attr.Key {
-	case "passphrase", "value", "plaintext", "identity", "secret":
+	case "passphrase", "value", "plaintext", "identity", "secret", "password", "token":
 		attr.Value = slog.StringValue("[REDACTED]")
 	}
 

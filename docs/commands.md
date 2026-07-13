@@ -82,6 +82,10 @@ safetybox reveal --prefix projects/myapp --format sh
 The single verb that prints plaintext. Everything else redacts.
 
 One name prints one JSON object, unchanged from earlier releases.
+`--json` compacts the JSON output and cannot be combined with
+`--format sh` or `--format fish`. A value that is not valid UTF-8
+warns on stderr, because JSON cannot carry it byte for byte. Use
+exec when the exact bytes matter.
 
 ```json
 {"name":"api/stripe/live","envName":"STRIPE_KEY","version":2,"expired":false,"value":"sk_live_example"}
@@ -90,13 +94,15 @@ One name prints one JSON object, unchanged from earlier releases.
 Several names, `--env`, or `--prefix` select a batch. The whole batch
 decrypts with one passphrase read and one identity unlock, which is
 the point. `--env` selects every secret that has an env name.
-`--prefix` selects every secret under a name prefix. The prefix
-matches exactly and is case-sensitive: it is a literal leading
-substring, not a pattern, so `_` and `%` in a name are ordinary
-characters and never wildcards. The two filters compose, and filters
-cannot be mixed with explicit names. Batch JSON output is an array. An
-explicit name that does not resolve fails the whole batch. A filter
-that matches nothing prints an empty array.
+`--prefix` selects the named secret itself and everything under it as
+whole segments. `projects/myapp` selects `projects/myapp` and
+`projects/myapp/token` but never the sibling `projects/myapp-legacy`.
+The match is exact and case-sensitive, never a pattern, so `_` and
+`%` in a name are ordinary characters. A trailing slash on the prefix
+is allowed and means the same thing. The two filters compose, and
+filters cannot be mixed with explicit names. Batch JSON output is an
+array. An explicit name that does not resolve fails the whole batch.
+A filter that matches nothing prints an empty array.
 
 `--format sh` and `--format fish` emit assignment lines ready to
 source into a shell session, using the env name recorded by set.
@@ -110,10 +116,14 @@ set -gx STRIPE_KEY 'sk_live_example'
 ```
 
 Values are single-quoted for the target shell, so embedded quotes,
-command substitutions, and newlines stay inert text. A selected
-secret with no env name, or with an env name that is not a valid
-shell identifier, is skipped with a warning on stderr and never
-silently dropped. Load your global secrets in one line:
+command substitutions, and newlines stay inert text. A
+filter-selected secret with no usable env name is skipped with a
+warning on stderr and never silently dropped. An explicitly named
+secret with no usable env name fails the whole batch before anything
+is emitted, the same way a missing name fails it. When two secrets
+share an env name the later assignment wins in the sourcing shell,
+and reveal warns about the override. Load your global secrets in one
+line:
 
 ```fish
 safetybox reveal --env --format fish --passphrase-file FILE | source
@@ -147,10 +157,10 @@ safetybox list [prefix]
 ```
 
 Lists every non-deleted secret, or only those under a name prefix.
-The prefix matches exactly and is case-sensitive, the same literal
-leading-substring rule reveal uses. Names are plaintext columns in the
-current format, so list needs no identity. Output is a JSON array of
-metadata summaries with the latest version number.
+The prefix selects whole segments, exactly and case-sensitively, the
+same rule reveal uses. Names are plaintext columns in the current
+format, so list needs no identity. Output is a JSON array of metadata
+summaries with the latest version number.
 
 ## stale
 
@@ -193,6 +203,11 @@ destroyed, inside one transaction. Rows and history remain, the
 values are gone forever. Refuses to run without `--yes`. purge
 implies delete.
 
+After the commit, purge scrubs the write-ahead log so the erased
+bytes do not linger in its frames. A reader in another safetybox
+process can block that scrub. purge warns on stderr when it happens
+and the next checkpoint reclaims the frames.
+
 ```json
 {"name":"legacy/token","destroyedVersions":1,"result":"purged"}
 ```
@@ -209,6 +224,12 @@ added to the environment. Everything after `--` belongs to the
 child. stdin, stdout, and stderr pass through, and the child's exit
 code is propagated. Expired secrets warn on stderr and still
 resolve.
+
+An env name stored before set validated them may not be a legal
+variable name. exec skips such a secret with a warning instead of
+injecting a malformed entry. When two secrets share an env name the
+later one wins in the child environment, and exec warns about the
+override.
 
 ## passwd
 
@@ -240,6 +261,13 @@ moves to a `.bak` sibling and the new one takes its place. Keep the
 and delete the old one. The passphrase stays the same. Use passwd to
 change it.
 
+Before touching anything, rekey verifies the vault is really
+encrypted to the loaded identity. If a previous rekey crashed after
+re-encrypting the vault, the staged `.new` sibling is the live key,
+and rekey refuses with recovery steps instead of discarding it. Like
+purge, rekey scrubs the write-ahead log after the commit and warns
+when another process blocks the scrub.
+
 ```json
 {"recipient":"age1...","rekeyedVersions":4,"backupIdentity":"~/.config/safetybox/identity.age.bak"}
 ```
@@ -250,4 +278,9 @@ change it.
 safetybox --version
 ```
 
-Prints the version stamped at build time from git describe.
+Prints the running version. Builds made through the Makefile or a
+release stamp it at build time. A plain `go install` gets no stamp,
+so the binary falls back to the module version recorded in the build
+info. Every path reports the same v-prefixed form, v1.2.0. Running
+`safetybox` with no arguments also shows the version under the
+banner.

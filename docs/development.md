@@ -16,7 +16,9 @@ make test   # go test ./...
 test build never masquerades as an installed one. `make build` is
 the clean build CI uses. `make install` is the official install into
 `$GOPATH/bin`. Everything builds with `CGO_ENABLED=0`, and the
-version comes from git describe through ldflags.
+version comes from git describe through ldflags. A build without
+ldflags, like a plain `go install`, falls back to the module version
+in the build info. Every path reports the v-prefixed tag.
 
 ## Testing
 

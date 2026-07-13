@@ -3,10 +3,11 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"regexp"
+	"strings"
 	"time"
+	"unicode/utf8"
 
-	"github.com/samuel-stidham/safetybox/internal/envelope"
+	"github.com/samuel-stidham/safetybox/internal/secret"
 	"github.com/samuel-stidham/safetybox/internal/vault"
 
 	"github.com/spf13/cobra"
@@ -39,16 +40,6 @@ type revealFlags struct {
 	format string
 }
 
-// revealItem is one selected secret before decryption. envName is
-// empty when the secret has none.
-type revealItem struct {
-	name      string
-	envName   string
-	version   int64
-	expiresAt *time.Time
-	envelope  []byte
-}
-
 func newRevealCmd(opts *options) *cobra.Command {
 	var flags revealFlags
 
@@ -62,7 +53,7 @@ func newRevealCmd(opts *options) *cobra.Command {
 			"ready to source into a shell session.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
-			if err := validateRevealRequest(args, flags); err != nil {
+			if err := validateRevealRequest(args, flags, opts.jsonCompact); err != nil {
 				return err
 			}
 
@@ -79,7 +70,7 @@ func newRevealCmd(opts *options) *cobra.Command {
 
 // validateRevealRequest rejects contradictory selections before any
 // vault or identity work happens.
-func validateRevealRequest(names []string, flags revealFlags) error {
+func validateRevealRequest(names []string, flags revealFlags, jsonCompact bool) error {
 	usingFilters := flags.env || flags.prefix != ""
 
 	if len(names) > 0 && usingFilters {
@@ -91,7 +82,13 @@ func validateRevealRequest(names []string, flags revealFlags) error {
 	}
 
 	switch flags.format {
-	case formatJSON, formatSh, formatFish:
+	case formatJSON:
+		return nil
+	case formatSh, formatFish:
+		if jsonCompact {
+			return errors.New("--json applies to json output, drop it or drop --format")
+		}
+
 		return nil
 	default:
 		return fmt.Errorf("--format %q is not json, sh, or fish", flags.format)
@@ -99,7 +96,7 @@ func validateRevealRequest(names []string, flags revealFlags) error {
 }
 
 func runReveal(cobraCmd *cobra.Command, opts *options, names []string, flags revealFlags) error {
-	items, err := collectRevealItems(opts, names, flags)
+	entries, err := collectRevealEntries(opts, names, flags)
 	if err != nil {
 		return err
 	}
@@ -108,16 +105,20 @@ func runReveal(cobraCmd *cobra.Command, opts *options, names []string, flags rev
 	// an empty result costs no passphrase prompt and no KDF.
 	outputs := make([]revealOutput, 0)
 
-	if len(items) > 0 {
-		outputs, err = decryptRevealItems(cobraCmd, opts, items)
+	if len(entries) > 0 {
+		outputs, err = decryptRevealEntries(cobraCmd, opts, entries)
 		if err != nil {
 			return err
 		}
 	}
 
 	if flags.format != formatJSON {
-		return printShellAssignments(cobraCmd, outputs, flags.format)
+		// Explicitly named secrets fail loudly when unusable, the same
+		// contract a missing name gets. Filter selections skip and warn.
+		return printShellAssignments(cobraCmd, outputs, flags.format, len(names) > 0)
 	}
+
+	warnNonUTF8(cobraCmd, outputs)
 
 	// A single explicit name keeps the original one-object output
 	// shape, so `reveal <name> --json | jq -r .value` stays stable.
@@ -128,10 +129,10 @@ func runReveal(cobraCmd *cobra.Command, opts *options, names []string, flags rev
 	return printJSON(cobraCmd, opts, outputs)
 }
 
-// collectRevealItems selects the secrets to decrypt. Explicit names
+// collectRevealEntries selects the secrets to decrypt. Explicit names
 // resolve one by one so a missing or deleted name fails loudly.
 // Filters select whatever matches, and matching nothing is fine.
-func collectRevealItems(opts *options, names []string, flags revealFlags) ([]revealItem, error) {
+func collectRevealEntries(opts *options, names []string, flags revealFlags) ([]vault.Entry, error) {
 	openedVault, err := opts.openVault()
 	if err != nil {
 		return nil, err
@@ -140,7 +141,7 @@ func collectRevealItems(opts *options, names []string, flags revealFlags) ([]rev
 	defer func() { _ = openedVault.Close() }()
 
 	if len(names) > 0 {
-		return itemsByName(openedVault, names)
+		return entriesByName(openedVault, names)
 	}
 
 	entries, err := openedVault.Entries(vault.EntryFilter{Prefix: flags.prefix, EnvNamed: flags.env})
@@ -148,23 +149,11 @@ func collectRevealItems(opts *options, names []string, flags revealFlags) ([]rev
 		return nil, userHint(err)
 	}
 
-	items := make([]revealItem, 0, len(entries))
-
-	for _, entry := range entries {
-		items = append(items, revealItem{
-			name:      entry.Name,
-			envName:   entry.EnvName,
-			version:   entry.Version,
-			expiresAt: entry.ExpiresAt,
-			envelope:  entry.Envelope,
-		})
-	}
-
-	return items, nil
+	return entries, nil
 }
 
-func itemsByName(openedVault *vault.Vault, names []string) ([]revealItem, error) {
-	items := make([]revealItem, 0, len(names))
+func entriesByName(openedVault *vault.Vault, names []string) ([]vault.Entry, error) {
+	entries := make([]vault.Entry, 0, len(names))
 
 	for _, name := range names {
 		resolved, err := openedVault.NewestEnabled(name)
@@ -172,90 +161,108 @@ func itemsByName(openedVault *vault.Vault, names []string) ([]revealItem, error)
 			return nil, userHint(err)
 		}
 
-		item := revealItem{
-			name:      resolved.Secret.Name,
-			version:   resolved.Version.Number,
-			expiresAt: resolved.Secret.ExpiresAt,
-			envelope:  resolved.Envelope,
+		entry := vault.Entry{
+			Name:      resolved.Secret.Name,
+			Version:   resolved.Version.Number,
+			ExpiresAt: resolved.Secret.ExpiresAt,
+			Envelope:  resolved.Envelope,
 		}
 
 		if resolved.Secret.EnvName != nil {
-			item.envName = *resolved.Secret.EnvName
+			entry.EnvName = *resolved.Secret.EnvName
 		}
 
-		items = append(items, item)
+		entries = append(entries, entry)
 	}
 
-	return items, nil
+	return entries, nil
 }
 
-// decryptRevealItems unlocks the identity once and opens every
-// envelope with it, so a batch pays the passphrase KDF a single time.
-func decryptRevealItems(cobraCmd *cobra.Command, opts *options, items []revealItem) ([]revealOutput, error) {
-	key, cleanup, err := loadIdentity(cobraCmd, opts)
-	if err != nil {
-		return nil, err
-	}
+// decryptRevealEntries opens every envelope through the shared batch
+// decrypt path, so a batch pays the passphrase KDF a single time.
+func decryptRevealEntries(cobraCmd *cobra.Command, opts *options, entries []vault.Entry) ([]revealOutput, error) {
+	outputs := make([]revealOutput, 0, len(entries))
 
-	defer cleanup()
-
-	now := nowUTC()
-	outputs := make([]revealOutput, 0, len(items))
-
-	for _, item := range items {
-		address := vault.CanonicalAddress(item.name, item.version)
-
-		value, err := envelope.Open(key, address, item.envelope)
-		if err != nil {
-			return nil, fmt.Errorf("open %s: %w", item.name, userHint(err))
-		}
-
-		expired := item.expiresAt != nil && !now.Before(*item.expiresAt)
-		if expired {
-			warnExpired(cobraCmd, item.name, item.expiresAt)
-		}
-
+	err := forEachDecrypted(cobraCmd, opts, entries, func(entry vault.Entry, expired bool, value secret.Value) error {
 		output := revealOutput{
-			Name:      item.name,
-			Version:   item.version,
-			ExpiresAt: item.expiresAt,
+			Name:      entry.Name,
+			Version:   entry.Version,
+			ExpiresAt: entry.ExpiresAt,
 			Expired:   expired,
 			// The one deliberate plaintext display in safetybox.
 			Value: string(value.Expose()),
 		}
 
-		if item.envName != "" {
-			envName := item.envName
+		if entry.EnvName != "" {
+			envName := entry.EnvName
 			output.EnvName = &envName
 		}
 
 		outputs = append(outputs, output)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return outputs, nil
 }
 
-// printShellAssignments writes one assignment line per secret that
-// carries a usable env name, and warns about the rest on stderr so a
-// sourced batch never silently drops a secret.
-func printShellAssignments(cobraCmd *cobra.Command, outputs []revealOutput, format string) error {
-	grammar := shellIdentifierGrammar()
+// shellUsable explains why an output cannot become an assignment
+// line. An empty reason means it can.
+func shellUsable(output revealOutput) string {
+	switch {
+	case output.EnvName == nil:
+		return "has no env name"
+	case !isShellIdentifier(*output.EnvName):
+		return fmt.Sprintf("env name %q is not a shell identifier", *output.EnvName)
+	case strings.ContainsRune(output.Value, 0):
+		return "value contains a NUL byte, which a shell variable cannot hold"
+	default:
+		return ""
+	}
+}
+
+// printShellAssignments writes one assignment line per usable secret.
+// With explicit names an unusable secret fails the whole batch before
+// anything is emitted, matching how a missing name fails. Filter
+// selections skip with a warning on stderr, so a sourced batch never
+// silently drops a secret. Duplicate env names warn because the last
+// assignment silently wins in the sourcing shell.
+func printShellAssignments(cobraCmd *cobra.Command, outputs []revealOutput, format string, explicit bool) error {
+	if explicit {
+		var unusable []string
+
+		for _, output := range outputs {
+			if reason := shellUsable(output); reason != "" {
+				unusable = append(unusable, fmt.Sprintf("%s %s", output.Name, reason))
+			}
+		}
+
+		if len(unusable) > 0 {
+			return fmt.Errorf("cannot emit %s assignments: %s (set an env name with `safetybox set <name> --env-name NAME`)",
+				format, strings.Join(unusable, "; "))
+		}
+	}
+
+	sourceOf := make(map[string]string, len(outputs))
 
 	for _, output := range outputs {
-		if output.EnvName == nil {
-			printStderr(cobraCmd, fmt.Sprintf("warning: secret %s has no env name, skipped\n", output.Name))
+		if reason := shellUsable(output); reason != "" {
+			printStderr(cobraCmd, fmt.Sprintf("warning: secret %s %s, skipped\n", output.Name, reason))
 
 			continue
 		}
 
-		if !grammar.MatchString(*output.EnvName) {
+		if previous, collided := sourceOf[*output.EnvName]; collided {
 			printStderr(cobraCmd, fmt.Sprintf(
-				"warning: secret %s env name %q is not a shell identifier, skipped\n",
-				output.Name, *output.EnvName,
+				"warning: env name %s from %s overrides the value from %s\n",
+				*output.EnvName, output.Name, previous,
 			))
-
-			continue
 		}
+
+		sourceOf[*output.EnvName] = output.Name
 
 		if _, err := fmt.Fprintln(cobraCmd.OutOrStdout(), assignmentLine(format, *output.EnvName, output.Value)); err != nil {
 			return fmt.Errorf("write shell assignment: %w", err)
@@ -265,12 +272,41 @@ func printShellAssignments(cobraCmd *cobra.Command, outputs []revealOutput, form
 	return nil
 }
 
-// shellIdentifierGrammar matches names safe on the left side of a
-// shell assignment. Anything looser could change the meaning of the
-// emitted line. Compiled per batch, not per secret, because
-// gochecknoglobals rules out a package-level compiled form.
-func shellIdentifierGrammar() *regexp.Regexp {
-	return regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+// warnNonUTF8 flags values that JSON cannot carry byte-for-byte.
+// encoding/json replaces invalid UTF-8 with U+FFFD, so a binary value
+// read back from JSON output differs from what the vault holds. exec
+// passes the exact bytes.
+func warnNonUTF8(cobraCmd *cobra.Command, outputs []revealOutput) {
+	for _, output := range outputs {
+		if !utf8.ValidString(output.Value) {
+			printStderr(cobraCmd, fmt.Sprintf(
+				"warning: secret %s is not valid UTF-8, JSON output replaces invalid bytes, use exec for exact bytes\n",
+				output.Name,
+			))
+		}
+	}
+}
+
+// isShellIdentifier reports whether name is safe on the left side of
+// a shell assignment: letters, digits, and underscores, not starting
+// with a digit. Anything looser could change the meaning of the
+// emitted line.
+func isShellIdentifier(name string) bool {
+	if name == "" || (name[0] >= '0' && name[0] <= '9') {
+		return false
+	}
+
+	for _, r := range name {
+		if !isIdentifierRune(r) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func isIdentifierRune(r rune) bool {
+	return r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
 }
 
 // assignmentLine renders one assignment in the requested dialect.

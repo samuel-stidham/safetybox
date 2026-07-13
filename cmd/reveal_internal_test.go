@@ -49,15 +49,27 @@ func TestQuoteFish(t *testing.T) {
 	}
 }
 
-func TestShellIdentifierGrammar(t *testing.T) {
-	grammar := shellIdentifierGrammar()
+func TestIsShellIdentifier(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{name: "upper snake", input: "STRIPE_KEY", want: true},
+		{name: "leading underscore", input: "_private2", want: true},
+		{name: "leading digit", input: "2LEADING", want: false},
+		{name: "dash", input: "BAD-DASH", want: false},
+		{name: "space", input: "SPACE D", want: false},
+		{name: "equals smuggle", input: "FOO=BAR", want: false},
+		{name: "unicode letter", input: "ÜBER", want: false},
+		{name: "empty", input: "", want: false},
+	}
 
-	assert.True(t, grammar.MatchString("STRIPE_KEY"))
-	assert.True(t, grammar.MatchString("_private2"))
-	assert.False(t, grammar.MatchString("2LEADING"))
-	assert.False(t, grammar.MatchString("BAD-DASH"))
-	assert.False(t, grammar.MatchString("SPACE D"))
-	assert.False(t, grammar.MatchString(""))
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			assert.Equal(t, testCase.want, isShellIdentifier(testCase.input))
+		})
+	}
 }
 
 func TestRevealMultipleNamesReturnsArray(t *testing.T) {
