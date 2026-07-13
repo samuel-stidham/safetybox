@@ -28,7 +28,13 @@ own address, and decryption fails if the ciphertext was moved or swapped.
 
 ## Install
 
-Build from source with Go 1.26 or later.
+Install the latest tagged release with Go 1.26 or later.
+
+```sh
+go install github.com/samuel-stidham/safetybox@latest
+```
+
+Or build from source.
 
 ```sh
 git clone https://github.com/samuel-stidham/safetybox.git
@@ -39,7 +45,8 @@ make build
 The binary lands in `bin/safetybox`. To install it on your PATH, run
 `make install` instead. That places the binary in `$GOPATH/bin`, which
 is `~/go/bin` by default. Prebuilt binaries for Linux and macOS ship
-with each GitHub release.
+with each GitHub release. Every install path reports the same
+v-prefixed version through `safetybox --version`.
 
 ## Getting started
 
