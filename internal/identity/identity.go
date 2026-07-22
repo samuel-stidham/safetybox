@@ -2,12 +2,12 @@
 // identity file.
 //
 // The file is age-encrypted with an scrypt passphrase. On disk it is
-// 0600 inside a 0700 directory, and Load refuses group- or
+// 0600 inside a 0700 directory, and [Load] refuses group- or
 // world-readable files, and a loose containing directory, the way ssh
-// does. The decrypted file bytes pass through a memguard LockedBuffer
+// does. The decrypted file bytes pass through a [memguard.LockedBuffer]
 // that is wiped by the returned cleanup function. Parsing makes one
 // interim heap string of the key line, and the parsed key itself is
-// an *age.X25519Identity, which age holds in an ordinary Go slice on
+// an [age.X25519Identity], which age holds in an ordinary Go slice on
 // the heap for the duration of one invocation. Those heap copies are
 // the practical limit of the in-memory protection here.
 package identity

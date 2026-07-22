@@ -242,13 +242,13 @@ type LoosePermission struct {
 	Recommend os.FileMode
 }
 
-// LoosePermissions returns one entry per vault-related path that grants
-// group or world access: the database file, its containing directory,
-// and the -wal and -shm siblings. It never prints, so the cmd layer
-// owns the warning, and it skips a path that does not exist. Unlike the
-// identity file, which gates key material and is refused when loose,
-// the vault holds ciphertext and public metadata, so a loose vault is
-// reported rather than blocked.
+// LoosePermissions returns a [LoosePermission] for each vault-related
+// path that grants group or world access: the database file, its
+// containing directory, and the -wal and -shm siblings. It never
+// prints, so the cmd layer owns the warning, and it skips a path that
+// does not exist. Unlike the identity file, which gates key material
+// and is refused when loose, the vault holds ciphertext and public
+// metadata, so a loose vault is reported rather than blocked.
 func LoosePermissions(path string) []LoosePermission {
 	path = filepath.Clean(path)
 

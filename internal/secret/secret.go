@@ -1,14 +1,14 @@
-// Package secret defines Value, the only type in this codebase
+// Package secret defines [Value], the only type in this codebase
 // allowed to hold plaintext secret bytes.
 //
 // The bytes are unexported and held behind a pointer. Plaintext exits
-// only through Expose. Every fmt verb is intercepted by Format, and
-// JSON and slog are overridden, so a directly rendered Value always
-// redacts. A Value stored in another struct's unexported field cannot
-// be method-dispatched by fmt reflection, so the pointer indirection
-// ensures that path reflects an address rather than the bytes. Never
-// add another exit and never move this type into a shared flat
-// package. The package boundary is what keeps the redaction total.
+// only through [Value.Expose]. Every fmt verb is intercepted by
+// [Value.Format], and JSON and slog are overridden, so a directly
+// rendered Value always redacts. A Value stored in another struct's
+// unexported field cannot be method-dispatched by fmt reflection, so
+// the pointer indirection ensures that path reflects an address rather
+// than the bytes. Never add another exit and never move this type into
+// a shared flat package. The package boundary keeps the redaction total.
 package secret
 
 import (
@@ -42,7 +42,8 @@ func New(plaintext []byte) Value {
 //
 // The returned slice aliases the Value's internal storage. Callers
 // must not retain it past the Value's lifetime or mutate it, because
-// copies of a Value share one backing array.
+// copies of a Value share one backing array. Use [Value.Destroy] to
+// wipe the storage once the plaintext is no longer needed.
 func (v Value) Expose() []byte {
 	if v.held == nil {
 		return nil

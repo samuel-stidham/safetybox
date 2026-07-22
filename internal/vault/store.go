@@ -612,11 +612,11 @@ func (v *Vault) Purge(name string) (int64, error) {
 // contention, but a reader in ANOTHER process can still block the
 // truncate. The pragma reports that as busy=1 with no SQL error, so
 // the result row is read rather than discarded and a blocked
-// checkpoint surfaces as ErrCheckpointBlocked. Purge and Rekey treat
-// any failure as best effort because the destructive operation is
-// already committed. Callers that must know the scrub happened, such
-// as the purge and rekey verbs warning the user, call this again and
-// check the error.
+// checkpoint surfaces as [ErrCheckpointBlocked]. [Vault.Purge] and
+// [Vault.Rekey] treat any failure as best effort because the
+// destructive operation is already committed. Callers that must know
+// the scrub happened, such as the purge and rekey verbs warning the
+// user, call this again and check the error.
 func (v *Vault) Checkpoint() error {
 	var busy, logFrames, checkpointed int64
 

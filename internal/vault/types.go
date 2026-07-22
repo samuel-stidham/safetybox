@@ -83,7 +83,7 @@ type Entry struct {
 }
 
 // Expired reports whether the entry is past its expiry at now, the
-// same rule SecretMeta.Expired applies. Expiry marks a secret stale.
+// same rule [SecretMeta.Expired] applies. Expiry marks a secret stale.
 // It never blocks resolution.
 func (e Entry) Expired(now time.Time) bool {
 	return e.ExpiresAt != nil && !now.Before(*e.ExpiresAt)

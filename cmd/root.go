@@ -41,8 +41,8 @@ type options struct {
 
 // Execute runs the root command. It propagates a child process exit
 // code from exec and exits 1 on any other error. Fatal exits route
-// through memguard.SafeExit so any locked key material is wiped before
-// the process leaves, even on the error paths.
+// through [memguard.SafeExit] so any locked key material is wiped
+// before the process leaves, even on the error paths.
 func Execute(version string) {
 	root := newRootCmd(version)
 
