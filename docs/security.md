@@ -42,6 +42,14 @@ matches the row the ciphertext came from. An attacker with write
 access to the database cannot swap envelopes between rows without
 detection.
 
+The stored recipient is that attacker's other target. A write to
+`vault_meta` could point new secrets at a key the attacker controls.
+Every decrypting verb now compares the stored recipient to your loaded
+identity and refuses on a mismatch, so tampering surfaces on the next
+read, even for old versions that still decrypt. The write path holds no
+identity by design, so it cannot prevent the bad write. Detection on
+read is the guard, not prevention at write time.
+
 ## Files and permissions
 
 The vault file is created 0600 with WAL journaling, and SQLite gives
@@ -51,6 +59,13 @@ containing directory, with group or world permission bits, the way
 ssh refuses a loose private key. A regular file passed to
 `--passphrase-file` is held to the same check. A pipe or process
 substitution is a transient stream and is allowed.
+
+The vault gets a warning rather than a refusal. On every run safetybox
+checks the vault file, its directory, and the `-wal` and `-shm`
+siblings, and warns on stderr when any of them grant group or world
+access. A refusal fits the identity file, which gates key material. The
+vault holds ciphertext plus public metadata, so a hard refusal would
+lock you out of your own data after a backup reset the mode.
 
 ## Key material in memory
 
@@ -90,6 +105,12 @@ process memory. safetybox is a careful single-user store, not an
 HSM. At-rest disk protection like FileVault remains worth having
 underneath it.
 
+Metadata integrity is only partial. An attacker with vault write
+access can alter any metadata column, not only the recipient. The
+recipient swap is caught on the next read, but changes to `env_name`,
+`expires_at`, or version state carry no integrity check in the current
+format. Treat write access to the vault file as a serious compromise.
+
 ## Secret names are plaintext
 
 Names, timestamps, version counts, and env variable names are
@@ -97,3 +118,8 @@ readable without the identity in the current format. That keeps
 list, stale, and prefix queries cheap. Treat names as
 non-confidential. This is a recorded open decision and may change
 before 1.0.
+
+Purge is subject to the same rule. It erases the values but keeps
+the secret row, so the name stays readable in the vault forever. A
+name like `customers/acme-corp/api-key` remains after purge. If a
+name itself is sensitive, purge does not remove it.
