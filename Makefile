@@ -40,7 +40,7 @@ clean: ## Clean up build output and artifacts.
 
 .PHONY: cover
 cover: artifacts ## Run tests and write the coverage profile.
-	go test -coverprofile=artifacts/coverage.out -covermode=atomic ./...
+	CGO_ENABLED=1 go test -race -coverprofile=artifacts/coverage.out -covermode=atomic ./...
 
 .PHONY: cover-func
 cover-func: cover ## Per-function coverage summary in the terminal.
@@ -79,5 +79,9 @@ lint-go: ## Run golangci-lint.
 lint: gofumpt gci lint-go ## Run the linters.
 
 .PHONY: test
-test: ## Run all Go tests.
-	go test ./...
+test: ## Run all Go tests with the race detector.
+	CGO_ENABLED=1 go test -race -count=1 ./...
+
+.PHONY: vuln
+vuln: ## Scan for known vulnerabilities in dependencies.
+	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
