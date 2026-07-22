@@ -47,10 +47,13 @@ type Summary struct {
 }
 
 // SetOptions carry the optional attributes of a set operation. Nil
-// pointer fields keep whatever the secret already stores.
+// pointer fields keep whatever the secret already stores. ClearExpiry
+// removes an existing expiry, the one operation a nil ExpiresAt cannot
+// express because nil means keep.
 type SetOptions struct {
 	EnvName        *string
 	ExpiresAt      *time.Time
+	ClearExpiry    bool
 	RevokePrevious bool
 }
 
@@ -108,12 +111,16 @@ func CanonicalAddress(name string, number int64) string {
 	return fmt.Sprintf("api/v1/%s/%d", name, number)
 }
 
+// nameGrammar is the hierarchical name grammar: segments of letters,
+// digits, dots, underscores, and dashes, joined by single slashes. It
+// is compiled once at package load, not per call.
+var nameGrammar = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$`)
+
 // ValidateName enforces the hierarchical name grammar: segments of
 // letters, digits, dots, underscores, and dashes, joined by single
 // slashes.
 func ValidateName(name string) error {
-	grammar := regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$`)
-	if !grammar.MatchString(name) {
+	if !nameGrammar.MatchString(name) {
 		return fmt.Errorf("%q: %w", name, ErrInvalidName)
 	}
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/samuel-stidham/safetybox/internal/logging"
 
+	"github.com/awnumar/memguard"
 	"github.com/spf13/cobra"
 )
 
@@ -39,17 +40,31 @@ type options struct {
 }
 
 // Execute runs the root command. It propagates a child process exit
-// code from exec and exits 1 on any other error.
+// code from exec and exits 1 on any other error. Fatal exits route
+// through memguard.SafeExit so any locked key material is wiped before
+// the process leaves, even on the error paths.
 func Execute(version string) {
-	if err := newRootCmd(version).Execute(); err != nil {
-		var exit exitCodeError
+	root := newRootCmd(version)
 
-		if errors.As(err, &exit) {
-			os.Exit(exit.code)
-		}
-
-		os.Exit(1)
+	err := root.Execute()
+	if err == nil {
+		return
 	}
+
+	var exit exitCodeError
+
+	if errors.As(err, &exit) {
+		// The child already reported its own failure, so propagate only
+		// its exit code with no extra safetybox error line.
+		memguard.SafeExit(exit.code)
+	}
+
+	// SilenceErrors is set on the root, so print the error here rather
+	// than let cobra print it, which is what keeps the exit-code path
+	// above quiet.
+	_, _ = fmt.Fprintln(root.ErrOrStderr(), "Error:", err)
+
+	memguard.SafeExit(1)
 }
 
 func newRootCmd(version string) *cobra.Command {
@@ -61,10 +76,15 @@ func newRootCmd(version string) *cobra.Command {
 		Long: logo + "\n\nsafetybox " + version + "\n\n" +
 			"safetybox is a CLI-first secrets manager. Values are sealed in age envelopes. Metadata lives in SQLite.",
 		Version: version,
-		PersistentPreRun: func(_ *cobra.Command, _ []string) {
+		PersistentPreRun: func(preRunCmd *cobra.Command, _ []string) {
 			logging.Setup(logging.Options{Verbose: opts.verbose, JSON: opts.logJSON})
+			warnLooseVaultPerms(preRunCmd, opts)
 		},
 		SilenceUsage: true,
+		// Execute prints errors itself, so the exec exit-code path can
+		// stay quiet instead of adding a redundant safetybox error line
+		// on top of the child's own failure output.
+		SilenceErrors: true,
 	}
 
 	flags := root.PersistentFlags()

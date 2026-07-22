@@ -224,7 +224,10 @@ func upsertSecret(ctx context.Context, txn *sql.Tx, name string, opts SetOptions
 
 	expiresAt := row.expiresAt
 
-	if opts.ExpiresAt != nil {
+	switch {
+	case opts.ClearExpiry:
+		expiresAt = sql.NullString{}
+	case opts.ExpiresAt != nil:
 		expiresAt = sql.NullString{String: formatTime(*opts.ExpiresAt), Valid: true}
 	}
 
@@ -528,10 +531,23 @@ func (v *Vault) SoftDelete(name string) error {
 
 	now := formatTime(time.Now().UTC())
 
-	_, err = v.handle.ExecContext(ctx,
-		"UPDATE secret SET deleted_at = ?, updated_at = ? WHERE id = ?", now, now, row.id)
+	// The deleted_at IS NULL guard makes the update self-checking, the
+	// same pattern Disable uses. A second racing delete or a purge that
+	// lands between the read above and this statement affects zero rows
+	// rather than overwriting the first tombstone's timestamp.
+	outcome, err := v.handle.ExecContext(ctx,
+		"UPDATE secret SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL", now, now, row.id)
 	if err != nil {
 		return fmt.Errorf("delete secret %s: %w", name, err)
+	}
+
+	changed, err := outcome.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete secret %s: %w", name, err)
+	}
+
+	if changed == 0 {
+		return fmt.Errorf("secret %s: %w", name, ErrSecretDeleted)
 	}
 
 	return nil

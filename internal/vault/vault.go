@@ -26,6 +26,9 @@ const (
 
 	metaKeyFormatVersion = "format_version"
 	metaKeyRecipient     = "recipient"
+
+	// unsafeBits are the group and world permission bits.
+	unsafeBits = 0o077
 )
 
 // Vault is an open handle to a vault database.
@@ -106,7 +109,11 @@ func Open(path string) (*Vault, error) {
 	if err != nil {
 		_ = handle.Close()
 
-		return nil, fmt.Errorf("read format version: %w", err)
+		// A file that opens as SQLite but has no vault_meta row or table
+		// is not a readable vault. The commonest cause is a half-created
+		// vault from a crashed init. Report a sentinel the cmd layer can
+		// turn into recovery guidance, instead of a raw driver error.
+		return nil, fmt.Errorf("open %s: %w: %w", path, ErrVaultCorrupt, err)
 	}
 
 	if version != strconv.Itoa(formatVersion) {
@@ -223,6 +230,61 @@ func initSchema(handle *sql.DB, recipient string) error {
 	}
 
 	return nil
+}
+
+// LoosePermission names one vault-related file whose mode grants group
+// or world access, for the cmd layer to warn about. Path is the file
+// or directory, and Recommend is the mode it should carry.
+type LoosePermission struct {
+	Label     string
+	Path      string
+	Mode      os.FileMode
+	Recommend os.FileMode
+}
+
+// LoosePermissions returns one entry per vault-related path that grants
+// group or world access: the database file, its containing directory,
+// and the -wal and -shm siblings. It never prints, so the cmd layer
+// owns the warning, and it skips a path that does not exist. Unlike the
+// identity file, which gates key material and is refused when loose,
+// the vault holds ciphertext and public metadata, so a loose vault is
+// reported rather than blocked.
+func LoosePermissions(path string) []LoosePermission {
+	path = filepath.Clean(path)
+
+	targets := []struct {
+		label     string
+		path      string
+		recommend os.FileMode
+	}{
+		{"vault file", path, vaultFileMode},
+		{"vault directory", filepath.Dir(path), vaultDirMode},
+		{"vault write-ahead log", path + "-wal", vaultFileMode},
+		{"vault shared-memory file", path + "-shm", vaultFileMode},
+	}
+
+	var loose []LoosePermission
+
+	for _, target := range targets {
+		info, err := os.Stat(target.path)
+		if err != nil {
+			continue
+		}
+
+		perm := info.Mode().Perm()
+		if perm&unsafeBits == 0 {
+			continue
+		}
+
+		loose = append(loose, LoosePermission{
+			Label:     target.label,
+			Path:      target.path,
+			Mode:      perm,
+			Recommend: target.recommend,
+		})
+	}
+
+	return loose
 }
 
 // RemoveFiles deletes a vault database and its WAL siblings, best

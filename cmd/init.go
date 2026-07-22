@@ -71,7 +71,7 @@ func runInit(cobraCmd *cobra.Command, opts *options) error {
 		// nothing yet, so remove it to keep init retryable.
 		_ = os.Remove(identityPath)
 
-		return fmt.Errorf("create vault: %w", err)
+		return userHint(fmt.Errorf("create vault: %w", err))
 	}
 
 	if err := selfTest(vaultPath, key); err != nil {
@@ -117,6 +117,8 @@ func selfTest(vaultPath string, key *age.X25519Identity) error {
 	if err != nil {
 		return fmt.Errorf("open probe: %w", err)
 	}
+
+	defer opened.Destroy()
 
 	if !bytes.Equal(opened.Expose(), probe) {
 		return errors.New("round-trip produced different bytes")

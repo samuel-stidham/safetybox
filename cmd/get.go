@@ -43,6 +43,10 @@ func runGet(cobraCmd *cobra.Command, opts *options, name string) error {
 		return err
 	}
 
+	// get renders the value redacted, so the plaintext is only ever a
+	// liability here. Wipe it once the output is written.
+	defer result.value.Destroy()
+
 	return printJSON(cobraCmd, opts, getOutput{
 		Name:      result.meta.Name,
 		Version:   result.version.Number,

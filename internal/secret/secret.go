@@ -51,6 +51,25 @@ func (v Value) Expose() []byte {
 	return *v.held
 }
 
+// Destroy zeroes the held plaintext and drops the reference. It cuts
+// the in-memory lifetime of a decrypted value down from the whole
+// process run to the span the caller actually needs it. Copies of a
+// Value share one backing array through a single pointer, so one
+// Destroy wipes every copy. It is safe to call more than once, and
+// Expose returns nil afterward. This does not reach Go strings already
+// produced by Expose, which are immutable and outside this control.
+func (v Value) Destroy() {
+	if v.held == nil {
+		return
+	}
+
+	for i := range *v.held {
+		(*v.held)[i] = 0
+	}
+
+	*v.held = nil
+}
+
 // Format implements fmt.Formatter so that EVERY verb redacts,
 // including numeric verbs like %d and %c that bypass fmt.Stringer.
 func (v Value) Format(f fmt.State, _ rune) {
