@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -23,15 +24,22 @@ const (
 
 // revealOutput is the ONLY output shape in this codebase carrying
 // plaintext. Its Value field is a plain string filled through
-// secret.Value.Expose, the single deliberate display exit.
+// secret.Value.Expose, the single deliberate display exit. Encoding is
+// empty for a plain UTF-8 value and "base64" when Value carries a
+// base64 rendering of bytes that JSON cannot hold verbatim.
 type revealOutput struct {
 	Name      string     `json:"name"`
 	EnvName   *string    `json:"envName,omitempty"`
 	Version   int64      `json:"version"`
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 	Expired   bool       `json:"expired"`
+	Encoding  string     `json:"encoding,omitempty"`
 	Value     string     `json:"value"`
 }
+
+// encodingBase64 marks a reveal value that was base64-encoded because
+// its raw bytes are not valid UTF-8.
+const encodingBase64 = "base64"
 
 // revealFlags carries the reveal verb's flag values.
 type revealFlags struct {
@@ -96,7 +104,7 @@ func validateRevealRequest(names []string, flags revealFlags, jsonCompact bool) 
 }
 
 func runReveal(cobraCmd *cobra.Command, opts *options, names []string, flags revealFlags) error {
-	entries, err := collectRevealEntries(opts, names, flags)
+	entries, recipient, err := collectRevealEntries(opts, names, flags)
 	if err != nil {
 		return err
 	}
@@ -106,7 +114,7 @@ func runReveal(cobraCmd *cobra.Command, opts *options, names []string, flags rev
 	outputs := make([]revealOutput, 0)
 
 	if len(entries) > 0 {
-		outputs, err = decryptRevealEntries(cobraCmd, opts, entries)
+		outputs, err = decryptRevealEntries(cobraCmd, opts, recipient, entries)
 		if err != nil {
 			return err
 		}
@@ -118,7 +126,7 @@ func runReveal(cobraCmd *cobra.Command, opts *options, names []string, flags rev
 		return printShellAssignments(cobraCmd, outputs, flags.format, len(names) > 0)
 	}
 
-	warnNonUTF8(cobraCmd, outputs)
+	encodeNonUTF8(cobraCmd, outputs)
 
 	// A single explicit name keeps the original one-object output
 	// shape, so `reveal <name> --json | jq -r .value` stays stable.
@@ -129,27 +137,35 @@ func runReveal(cobraCmd *cobra.Command, opts *options, names []string, flags rev
 	return printJSON(cobraCmd, opts, outputs)
 }
 
-// collectRevealEntries selects the secrets to decrypt. Explicit names
-// resolve one by one so a missing or deleted name fails loudly.
+// collectRevealEntries selects the secrets to decrypt and returns the
+// vault's stored recipient for the decrypt path to verify. Explicit
+// names resolve one by one so a missing or deleted name fails loudly.
 // Filters select whatever matches, and matching nothing is fine.
-func collectRevealEntries(opts *options, names []string, flags revealFlags) ([]vault.Entry, error) {
+func collectRevealEntries(opts *options, names []string, flags revealFlags) ([]vault.Entry, string, error) {
 	openedVault, err := opts.openVault()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	defer func() { _ = openedVault.Close() }()
 
+	recipient, err := openedVault.Recipient()
+	if err != nil {
+		return nil, "", fmt.Errorf("read stored recipient: %w", err)
+	}
+
 	if len(names) > 0 {
-		return entriesByName(openedVault, names)
+		entries, err := entriesByName(openedVault, names)
+
+		return entries, recipient, err
 	}
 
 	entries, err := openedVault.Entries(vault.EntryFilter{Prefix: flags.prefix, EnvNamed: flags.env})
 	if err != nil {
-		return nil, userHint(err)
+		return nil, "", userHint(err)
 	}
 
-	return entries, nil
+	return entries, recipient, nil
 }
 
 func entriesByName(openedVault *vault.Vault, names []string) ([]vault.Entry, error) {
@@ -179,29 +195,33 @@ func entriesByName(openedVault *vault.Vault, names []string) ([]vault.Entry, err
 }
 
 // decryptRevealEntries opens every envelope through the shared batch
-// decrypt path, so a batch pays the passphrase KDF a single time.
-func decryptRevealEntries(cobraCmd *cobra.Command, opts *options, entries []vault.Entry) ([]revealOutput, error) {
+// decrypt path, so a batch pays the passphrase KDF a single time. The
+// recipient is verified against the identity before anything decrypts.
+func decryptRevealEntries(
+	cobraCmd *cobra.Command, opts *options, recipient string, entries []vault.Entry,
+) ([]revealOutput, error) {
 	outputs := make([]revealOutput, 0, len(entries))
 
-	err := forEachDecrypted(cobraCmd, opts, entries, func(entry vault.Entry, expired bool, value secret.Value) error {
-		output := revealOutput{
-			Name:      entry.Name,
-			Version:   entry.Version,
-			ExpiresAt: entry.ExpiresAt,
-			Expired:   expired,
-			// The one deliberate plaintext display in safetybox.
-			Value: string(value.Expose()),
-		}
+	err := forEachDecrypted(cobraCmd, opts, recipient, entries,
+		func(entry vault.Entry, expired bool, value secret.Value) error {
+			output := revealOutput{
+				Name:      entry.Name,
+				Version:   entry.Version,
+				ExpiresAt: entry.ExpiresAt,
+				Expired:   expired,
+				// The one deliberate plaintext display in safetybox.
+				Value: string(value.Expose()),
+			}
 
-		if entry.EnvName != "" {
-			envName := entry.EnvName
-			output.EnvName = &envName
-		}
+			if entry.EnvName != "" {
+				envName := entry.EnvName
+				output.EnvName = &envName
+			}
 
-		outputs = append(outputs, output)
+			outputs = append(outputs, output)
 
-		return nil
-	})
+			return nil
+		})
 	if err != nil {
 		return nil, err
 	}
@@ -272,18 +292,26 @@ func printShellAssignments(cobraCmd *cobra.Command, outputs []revealOutput, form
 	return nil
 }
 
-// warnNonUTF8 flags values that JSON cannot carry byte-for-byte.
-// encoding/json replaces invalid UTF-8 with U+FFFD, so a binary value
-// read back from JSON output differs from what the vault holds. exec
-// passes the exact bytes.
-func warnNonUTF8(cobraCmd *cobra.Command, outputs []revealOutput) {
-	for _, output := range outputs {
-		if !utf8.ValidString(output.Value) {
-			printStderr(cobraCmd, fmt.Sprintf(
-				"warning: secret %s is not valid UTF-8, JSON output replaces invalid bytes, use exec for exact bytes\n",
-				output.Name,
-			))
+// encodeNonUTF8 base64-encodes any value JSON cannot carry byte for
+// byte. encoding/json would otherwise replace invalid UTF-8 with
+// U+FFFD, so a binary value read back from JSON would differ from what
+// the vault holds. Encoded values are marked with encoding: "base64"
+// and a stderr warning, so a piped consumer can decode them or reach
+// for exec instead. It mutates outputs in place.
+func encodeNonUTF8(cobraCmd *cobra.Command, outputs []revealOutput) {
+	for i := range outputs {
+		if utf8.ValidString(outputs[i].Value) {
+			continue
 		}
+
+		printStderr(cobraCmd, fmt.Sprintf(
+			"warning: secret %s is not valid UTF-8, its JSON value is base64-encoded, "+
+				"use exec for raw bytes\n",
+			outputs[i].Name,
+		))
+
+		outputs[i].Value = base64.StdEncoding.EncodeToString([]byte(outputs[i].Value))
+		outputs[i].Encoding = encodingBase64
 	}
 }
 

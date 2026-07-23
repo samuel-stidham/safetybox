@@ -49,4 +49,6 @@ a warning on stderr and still resolves on stdout.
 
 Exit codes are 0 on success and 1 on any error. exec is the
 exception. It propagates the child's exit code so wrappers behave
-like the wrapped command.
+like the wrapped command. A child killed by a signal exits 128 plus
+the signal number, so a wrapper reads the death the way a shell
+would.

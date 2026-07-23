@@ -157,6 +157,78 @@ func TestOpenRejectsGarbageFile(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestOpenReportsCorruptVault covers B-4: an empty file at the vault
+// path, the shape a crashed init leaves, opens as SQLite but has no
+// vault_meta. Open must report the corrupt sentinel, not a raw driver
+// error, so the cmd layer can hint at recovery.
+func TestOpenReportsCorruptVault(t *testing.T) {
+	path := vaultPath(t)
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
+
+	_, err := vault.Open(path)
+	require.ErrorIs(t, err, vault.ErrVaultCorrupt)
+}
+
+// TestOpenReportsCorruptVaultOnMissingVersionRow covers the other
+// corrupt shape: the vault_meta table exists but its format_version
+// row is gone. That missing row is corrupt metadata, so Open reports
+// the sentinel. Any error that is not a missing table or row is
+// operational and passes through instead, so a locked or unreadable
+// database is never mislabeled as corrupt.
+func TestOpenReportsCorruptVaultOnMissingVersionRow(t *testing.T) {
+	path := vaultPath(t)
+
+	require.NoError(t, vault.Create(path, fakeRecipient))
+
+	raw, err := sql.Open("sqlite", "file:"+path)
+	require.NoError(t, err)
+
+	_, err = raw.ExecContext(context.Background(),
+		"DELETE FROM vault_meta WHERE key = 'format_version'")
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	_, err = vault.Open(path)
+	require.ErrorIs(t, err, vault.ErrVaultCorrupt)
+}
+
+// TestLoosePermissionsFlagsLooseFile covers A-1 and B-5: a vault file
+// with group or world bits is reported for the cmd layer to warn about.
+func TestLoosePermissionsFlagsLooseFile(t *testing.T) {
+	path := vaultPath(t)
+
+	require.NoError(t, vault.Create(path, fakeRecipient))
+	require.NoError(t, os.Chmod(path, 0o644))
+
+	loose := vault.LoosePermissions(path)
+	require.NotEmpty(t, loose, "a 0644 vault file must be flagged")
+
+	var flaggedFile bool
+
+	for _, entry := range loose {
+		if entry.Path == path {
+			flaggedFile = true
+
+			assert.Equal(t, os.FileMode(0o644), entry.Mode.Perm())
+			assert.Equal(t, os.FileMode(0o600), entry.Recommend)
+		}
+	}
+
+	assert.True(t, flaggedFile, "the vault file itself must be in the report")
+}
+
+// TestLoosePermissionsCleanVaultIsEmpty pins that a freshly created
+// vault at 0600 in a 0700 directory reports nothing.
+func TestLoosePermissionsCleanVaultIsEmpty(t *testing.T) {
+	path := vaultPath(t)
+
+	require.NoError(t, vault.Create(path, fakeRecipient))
+
+	assert.Empty(t, vault.LoosePermissions(path))
+}
+
 func TestSchemaRejectsInvalidState(t *testing.T) {
 	path := vaultPath(t)
 

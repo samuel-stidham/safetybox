@@ -7,6 +7,10 @@ var (
 	ErrVaultNotFound = errors.New("vault not found")
 	// ErrVaultExists means Create was pointed at an existing vault.
 	ErrVaultExists = errors.New("vault already exists")
+	// ErrVaultCorrupt means the file at the vault path exists but has
+	// no schema or metadata, usually a half-created vault left by an
+	// init that crashed before its schema transaction committed.
+	ErrVaultCorrupt = errors.New("vault is not initialized or is corrupt")
 	// ErrFormatVersion means the vault was written by an
 	// incompatible format version.
 	ErrFormatVersion = errors.New("unsupported vault format version")

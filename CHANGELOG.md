@@ -4,6 +4,78 @@ All notable changes to safetybox are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 2026-07-22
+
+A security-review release. An adversarial two-reviewer pass found
+seventeen issues, and this release fixes the code-level ones. Four
+changes alter observable behavior, so this is a major version. The
+breaking changes are `exec` exit codes for signal deaths, the
+`reveal --json` shape for binary values, the meaning of an empty
+`--expires`, and a new refusal when the vault recipient does not
+match the identity.
+
+### Added
+
+- Clearing an expiry or an env name. An empty value passed to
+  `--expires` or `--env-name` now removes the attribute. Before, an
+  empty `--expires` was a silent no-op, and an expiry could never be
+  removed at all.
+- Base64 output for binary reveal values. A `reveal --json` value that
+  is not valid UTF-8 is now base64-encoded and marked with an
+  `encoding` field, so a consumer recovers the exact bytes. Before, the
+  invalid bytes were replaced with U+FFFD.
+- A vulnerability scan in the toolchain. `make vuln` runs govulncheck,
+  the CI test step runs under the race detector, and CI gained a
+  govulncheck step.
+- A full tutorial and a documentation index under `docs/`. The tutorial
+  runs every command in order and covers moving a vault between
+  machines.
+- A roadmap under `docs/roadmap.md` that tracks the security items the
+  review left open for a later release.
+
+### Security
+
+- Read verbs verify the vault recipient against the loaded identity. A
+  vault-write attacker could swap the stored recipient so later writes
+  seal to their key. safetybox now refuses on a mismatch, so the swap
+  surfaces on the next read, even for versions that still decrypt under
+  the old key. The write path holds no identity by design, so this is
+  detection on read, not prevention at write time.
+- A loose vault now warns. safetybox checks the vault file, its
+  directory, and the WAL siblings on every run. It warns on stderr when
+  any of them grant group or world access. The identity file is still
+  refused outright, because it gates key material.
+- Decrypted plaintext copies are wiped sooner. `secret.Value` gained a
+  `Destroy` method. The reveal, exec, get, set, and rekey paths now call
+  it as soon as the value is used, so a copy no longer lingers on the
+  heap for the whole run.
+- A signal now wipes the identity enclave. `main` installs a memguard
+  interrupt handler and routes fatal exits through `SafeExit`, so a
+  Ctrl-C during a decrypt scrubs the key before the process exits.
+
+### Fixed
+
+- `exec` no longer fails for every command when a single env-named
+  secret holds a NUL byte. The offending secret is skipped with a
+  warning that names it, and the rest inject.
+- A child killed by a signal now exits 128 plus the signal number, not
+  255, so a supervisor reads a signal death correctly.
+- JSON output no longer exits 0 after a failed stdout write. A full disk
+  or a broken pipe returns a write error instead of silently truncating
+  the output.
+- A half-created vault, the shape a crashed `init` leaves, now reports a
+  recovery hint instead of a raw SQL error about a missing table.
+- `delete` guards its update against a concurrent delete or purge, so a
+  race cannot overwrite the first tombstone's timestamp.
+- The `purge` help and the security model now state that a purged secret
+  keeps its name in the vault forever.
+- A locked or unreadable vault no longer reports as half-created. Open
+  reserves the corrupt-vault hint for a missing table or version row,
+  and passes operational errors through unwrapped.
+- The loose-permission warning now says group or world can access the
+  vault, rather than read it. The check flags any group or world bit,
+  not only read.
+
 ## [1.2.0] - 2026-07-12
 
 ### Added
@@ -218,6 +290,7 @@ and there is no plaintext storage mode.
   command, configuration, the security model, architecture, and
   development.
 
+[2.0.0]: https://github.com/samuel-stidham/safetybox/releases/tag/v2.0.0
 [1.2.0]: https://github.com/samuel-stidham/safetybox/releases/tag/v1.2.0
 [1.1.0]: https://github.com/samuel-stidham/safetybox/releases/tag/v1.1.0
 [1.0.1]: https://github.com/samuel-stidham/safetybox/releases/tag/v1.0.1

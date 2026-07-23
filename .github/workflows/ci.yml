@@ -40,7 +40,14 @@ jobs:
           git diff --exit-code
 
       - name: Test
+        # The race detector needs cgo, so this step overrides the
+        # job-wide CGO_ENABLED=0 that the shipped binary is built with.
         run: make test
+        env:
+          CGO_ENABLED: "1"
+
+      - name: Vulnerability scan
+        run: make vuln
 
   gitleaks:
     runs-on: ubuntu-latest

@@ -10,6 +10,13 @@ passwd, and rekey. Verbs that only write or read metadata never ask
 for it: set, show, list, stale, disable, delete, and purge. That
 asymmetry is the point of storing the public recipient in the vault.
 
+Two guards apply across every verb. safetybox warns on stderr when the
+vault file, its directory, or its write-ahead siblings grant group or
+world access, since names and timestamps are plaintext columns. And
+every decrypting verb refuses when the vault's stored recipient does
+not match your identity, which flags a tampered vault or the wrong
+identity before it prints a confusing decryption error.
+
 ## init
 
 ```sh
@@ -41,11 +48,12 @@ is valid. Leading slashes, trailing slashes, and spaces are not.
 be a valid shell identifier, letters, digits, and underscores, not
 starting with a digit, so exec and `reveal --format` can emit it as a
 variable name. `--expires` takes RFC3339 or YYYY-MM-DD, where a bare
-date means
-midnight UTC. Both attributes stick until a later set changes them.
-`--revoke-previous` disables all older enabled versions in the same
-transaction. Without it, prior versions stay enabled so rotation has
-an overlap window.
+date means midnight UTC. Both attributes stick until a later set
+changes them. Pass an empty value to either flag to clear it, so
+`--expires ''` removes an expiry and `--env-name ''` removes the env
+name. `--revoke-previous` disables all older enabled versions in the
+same transaction. Without it, prior versions stay enabled so rotation
+has an overlap window.
 
 Setting a soft-deleted secret revives it. Version numbers are
 monotonic and never reused, even across delete and revive.
@@ -84,8 +92,10 @@ The single verb that prints plaintext. Everything else redacts.
 One name prints one JSON object, unchanged from earlier releases.
 `--json` compacts the JSON output and cannot be combined with
 `--format sh` or `--format fish`. A value that is not valid UTF-8
-warns on stderr, because JSON cannot carry it byte for byte. Use
-exec when the exact bytes matter.
+cannot ride inside JSON byte for byte, so safetybox base64-encodes it,
+adds an `encoding` field set to `base64`, and warns on stderr. A plain
+UTF-8 value has no encoding field and reads as itself. Use exec when
+you want the raw bytes without decoding.
 
 ```json
 {"name":"api/stripe/live","envName":"STRIPE_KEY","version":2,"expired":false,"value":"sk_live_example"}
@@ -199,9 +209,10 @@ safetybox purge <name> --yes
 ```
 
 Erases every envelope of the secret and marks all versions
-destroyed, inside one transaction. Rows and history remain, the
-values are gone forever. Refuses to run without `--yes`. purge
-implies delete.
+destroyed, inside one transaction. Rows and history remain, so the
+secret name stays readable in the vault forever, even after purge. If
+a name itself is sensitive, purge does not remove it. The values are
+gone forever. Refuses to run without `--yes`. purge implies delete.
 
 After the commit, purge scrubs the write-ahead log so the erased
 bytes do not linger in its frames. A reader in another safetybox
@@ -221,15 +232,18 @@ safetybox exec -- <command> [args...]
 Resolves every non-deleted secret that has an env name, decrypts its
 newest enabled version, and runs the command with those variables
 added to the environment. Everything after `--` belongs to the
-child. stdin, stdout, and stderr pass through, and the child's exit
-code is propagated. Expired secrets warn on stderr and still
-resolve.
+child. stdin, stdout, and stderr pass through. The child's exit code
+is propagated, and a child killed by a signal exits 128 plus the
+signal number, the way a shell reports it. Expired secrets warn on
+stderr and still resolve.
 
 An env name stored before set validated them may not be a legal
 variable name. exec skips such a secret with a warning instead of
-injecting a malformed entry. When two secrets share an env name the
-later one wins in the child environment, and exec warns about the
-override.
+injecting a malformed entry. A value that holds a NUL byte cannot
+become an environment variable either, so exec skips it with a warning
+that names it and runs the command with the rest. When two secrets
+share an env name the later one wins in the child environment, and
+exec warns about the override.
 
 ## passwd
 

@@ -9,7 +9,8 @@ How to build, test, and release safetybox.
 ```sh
 make dev    # build bin/safetybox with a -dev version suffix
 make lint   # gofumpt, gci, golangci-lint, all fixers on
-make test   # go test ./...
+make test   # go test -race, with cgo on for the detector
+make vuln   # govulncheck against the dependency tree
 ```
 
 `make dev` builds into `bin/` and tags the version with `-dev` so a
@@ -26,7 +27,9 @@ Tests run against real SQLite databases in `t.TempDir()` and real
 age keys generated per test. There are no mocks. The cmd package
 carries an end-to-end suite that drives the CLI in process through
 init, set, rotation, disable, revoke, exec, rekey, passwd, delete,
-purge, and revive.
+purge, and revive. `make test` runs the race detector, so it forces
+`CGO_ENABLED=1` for the test build even though the shipped binary is
+built with cgo disabled.
 
 Two conventions are non-negotiable. Every envelope test includes a
 corrupt-one-byte case asserting decryption fails. Test fixtures use
@@ -54,8 +57,9 @@ vendored.
 ## Commits and CI
 
 Commits follow the conventional commit format and are GPG-signed.
-CI runs build, lint with a `git diff --exit-code` guard, tests, and
-a gitleaks history scan on every push and pull request.
+CI runs build, lint with a `git diff --exit-code` guard, tests under
+the race detector, a govulncheck scan, and a gitleaks history scan on
+every push and pull request.
 
 ## Releases
 

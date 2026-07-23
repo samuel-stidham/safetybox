@@ -57,26 +57,9 @@ func newSetCmd(opts *options) *cobra.Command {
 }
 
 func runSet(cobraCmd *cobra.Command, opts *options, name string, flags setFlags) error {
-	setOpts := vault.SetOptions{RevokePrevious: flags.revokePrevious}
-
-	if cobraCmd.Flags().Changed("env-name") {
-		// A non-empty env name must be a valid shell identifier so that
-		// exec and reveal --format can emit it as a variable name. An
-		// empty value is the signal to clear the env name.
-		if flags.envName != "" && !isShellIdentifier(flags.envName) {
-			return fmt.Errorf("--env-name %q is not a valid shell identifier", flags.envName)
-		}
-
-		setOpts.EnvName = &flags.envName
-	}
-
-	if flags.expires != "" {
-		expiresAt, err := parseExpiry(flags.expires)
-		if err != nil {
-			return err
-		}
-
-		setOpts.ExpiresAt = &expiresAt
+	setOpts, err := setOptionsFromFlags(cobraCmd, flags)
+	if err != nil {
+		return err
 	}
 
 	value, err := readSecretValue(cobraCmd, name)
@@ -99,7 +82,10 @@ func runSet(cobraCmd *cobra.Command, opts *options, name string, flags setFlags)
 	}
 
 	result, err := openedVault.AppendVersion(name, setOpts, func(address string) ([]byte, error) {
-		return envelope.Seal(recipient, address, secret.New(value))
+		plaintext := secret.New(value)
+		defer plaintext.Destroy()
+
+		return envelope.Seal(recipient, address, plaintext)
 	})
 	if err != nil {
 		return userHint(err)
@@ -113,6 +99,45 @@ func runSet(cobraCmd *cobra.Command, opts *options, name string, flags setFlags)
 		ExpiresAt: result.Secret.ExpiresAt,
 		Revoked:   result.Revoked,
 	})
+}
+
+// setOptionsFromFlags translates the set flags into vault options. An
+// empty --env-name clears the env name, and an empty --expires clears
+// the expiry, both distinguished from "unset" by Flags().Changed.
+func setOptionsFromFlags(cobraCmd *cobra.Command, flags setFlags) (vault.SetOptions, error) {
+	setOpts := vault.SetOptions{RevokePrevious: flags.revokePrevious}
+
+	if cobraCmd.Flags().Changed("env-name") {
+		// A non-empty env name must be a valid shell identifier so that
+		// exec and reveal --format can emit it as a variable name. An
+		// empty value is the signal to clear the env name.
+		if flags.envName != "" && !isShellIdentifier(flags.envName) {
+			return vault.SetOptions{}, fmt.Errorf("--env-name %q is not a valid shell identifier", flags.envName)
+		}
+
+		setOpts.EnvName = &flags.envName
+	}
+
+	if cobraCmd.Flags().Changed("expires") {
+		// An explicit empty value clears the expiry, mirroring how an
+		// empty --env-name clears the env name. Without this an expiry
+		// could never be removed, and `--expires ""` was silently a
+		// no-op that reported success.
+		if flags.expires == "" {
+			setOpts.ClearExpiry = true
+
+			return setOpts, nil
+		}
+
+		expiresAt, err := parseExpiry(flags.expires)
+		if err != nil {
+			return vault.SetOptions{}, err
+		}
+
+		setOpts.ExpiresAt = &expiresAt
+	}
+
+	return setOpts, nil
 }
 
 // readSecretValue reads the plaintext from a no-echo prompt on a
