@@ -1,6 +1,7 @@
 package secret
 
 import (
+	"errors"
 	"fmt"
 	"io"
 )
@@ -14,8 +15,10 @@ const readChunk = 512
 // buffers on the heap unwiped, which for secret input means an unzeroed
 // copy of the plaintext lingers until the garbage collector reuses it.
 // On a read error the partial content is wiped and nil is returned, so
-// a half-read secret never survives the failure. The caller owns the
-// returned slice and should zero it after use.
+// a half-read secret never survives the failure. On success the unused
+// capacity of the returned slice is wiped, so scratch a reader may have
+// left past its reported count does not survive. The caller owns the
+// returned content and should zero it after use.
 //
 // End of input is exactly a bare io.EOF, matching io.ReadAll. An error
 // that merely wraps io.EOF is a genuine failure, and treating it as a
@@ -25,7 +28,17 @@ func ReadAllWiping(r io.Reader) ([]byte, error) {
 
 	for {
 		if len(buf) == cap(buf) {
-			grown := make([]byte, len(buf), cap(buf)+cap(buf)+readChunk)
+			newCap := cap(buf) + cap(buf) + readChunk
+			if newCap <= cap(buf) {
+				// The growth overflowed int, which takes an input larger
+				// than any machine can hold. Fail cleanly rather than let
+				// make panic on a negative capacity.
+				wipe(buf)
+
+				return nil, errors.New("read: input too large")
+			}
+
+			grown := make([]byte, len(buf), newCap)
 			copy(grown, buf)
 			wipe(buf)
 			buf = grown
@@ -36,6 +49,11 @@ func ReadAllWiping(r io.Reader) ([]byte, error) {
 
 		if err != nil {
 			if err == io.EOF {
+				// Wipe the unused tail, so scratch a reader may have left
+				// past its reported count does not survive in the backing
+				// array. The content stays intact.
+				wipe(buf[len(buf):cap(buf)])
+
 				return buf, nil
 			}
 
