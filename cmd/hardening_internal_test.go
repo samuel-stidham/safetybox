@@ -276,8 +276,13 @@ func TestReadRefusesEmptyEnvName(t *testing.T) {
 	// vault-write attacker.
 	tamperColumn(t, fixture.vaultPath, "env_name", "", "api/noenv")
 
-	// An explicit read refuses, catching the metadata edit.
+	// Both explicit reads refuse, catching the metadata edit. reveal
+	// <name> is the plaintext verb, so a missed refusal there would print
+	// the value under a tampered column, which get would still catch.
 	_, _, err := fixture.run("", "get", "api/noenv")
+	require.ErrorIs(t, err, ErrMetadataTampered)
+
+	_, _, err = fixture.run("", "reveal", "api/noenv")
 	require.ErrorIs(t, err, ErrMetadataTampered)
 
 	// The flip newly selects the secret for reveal --env, but the batch

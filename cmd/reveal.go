@@ -185,10 +185,11 @@ func entriesByName(ctx context.Context, openedVault *vault.Vault, names []string
 		}
 
 		entry := vault.Entry{
-			Name:      resolved.Secret.Name,
-			Version:   resolved.Version.Number,
-			ExpiresAt: resolved.Secret.ExpiresAt,
-			Envelope:  resolved.Envelope,
+			Name:         resolved.Secret.Name,
+			Version:      resolved.Version.Number,
+			ExpiresAt:    resolved.Secret.ExpiresAt,
+			Envelope:     resolved.Envelope,
+			EnvNameValid: resolved.Secret.EnvName != nil,
 		}
 
 		if resolved.Secret.EnvName != nil {
