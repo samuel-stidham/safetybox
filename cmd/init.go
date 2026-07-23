@@ -8,10 +8,10 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/samuel-stidham/safetybox/v2/internal/envelope"
-	"github.com/samuel-stidham/safetybox/v2/internal/identity"
-	"github.com/samuel-stidham/safetybox/v2/internal/secret"
-	"github.com/samuel-stidham/safetybox/v2/internal/vault"
+	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v3/internal/identity"
+	"github.com/samuel-stidham/safetybox/v3/internal/secret"
+	"github.com/samuel-stidham/safetybox/v3/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -111,12 +111,12 @@ func selfTest(ctx context.Context, vaultPath string, key *age.X25519Identity) er
 
 	probe := []byte("safetybox-init-self-test-probe")
 
-	sealed, err := envelope.Seal(recipient, probeAddress, secret.New(probe))
+	sealed, err := envelope.Seal(recipient, probeAddress, envelope.Bound{}, secret.New(probe))
 	if err != nil {
 		return fmt.Errorf("seal probe: %w", err)
 	}
 
-	opened, err := envelope.Open(key, probeAddress, sealed)
+	opened, _, err := envelope.Open(key, probeAddress, sealed)
 	if err != nil {
 		return fmt.Errorf("open probe: %w", err)
 	}

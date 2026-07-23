@@ -7,9 +7,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/samuel-stidham/safetybox/v2/internal/envelope"
-	"github.com/samuel-stidham/safetybox/v2/internal/secret"
-	"github.com/samuel-stidham/safetybox/v2/internal/vault"
+	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v3/internal/secret"
+	"github.com/samuel-stidham/safetybox/v3/internal/vault"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -82,12 +82,15 @@ func runSet(cobraCmd *cobra.Command, opts *options, name string, flags setFlags)
 		return err
 	}
 
-	result, err := openedVault.AppendVersion(ctx, name, setOpts, func(address string) ([]byte, error) {
-		plaintext := secret.New(value)
-		defer plaintext.Destroy()
+	result, err := openedVault.AppendVersion(ctx, name, setOpts,
+		func(address, envName, expiresAt string) ([]byte, error) {
+			plaintext := secret.New(value)
+			defer plaintext.Destroy()
 
-		return envelope.Seal(recipient, address, plaintext)
-	})
+			bound := envelope.Bound{EnvName: envName, ExpiresAt: expiresAt}
+
+			return envelope.Seal(recipient, address, bound, plaintext)
+		})
 	if err != nil {
 		return userHint(err)
 	}

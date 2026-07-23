@@ -20,7 +20,12 @@ import (
 
 const (
 	// formatVersion is the vault format this build reads and writes.
-	formatVersion = 1
+	// Version 2 seals the env name and expiry into each envelope, so a
+	// read can detect a plaintext-column edit. The SQL schema is
+	// unchanged from version 1, so formatVersion can exceed the number
+	// of SQL migrations. A version 1 vault must be migrated, which
+	// re-seals every envelope into the version 2 frame.
+	formatVersion = 2
 
 	vaultFileMode = 0o600
 	vaultDirMode  = 0o700

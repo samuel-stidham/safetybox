@@ -1,4 +1,4 @@
-module github.com/samuel-stidham/safetybox/v2
+module github.com/samuel-stidham/safetybox/v3
 
 go 1.26
 

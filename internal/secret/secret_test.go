@@ -10,7 +10,7 @@ import (
 	"testing"
 	"testing/iotest"
 
-	"github.com/samuel-stidham/safetybox/v2/internal/secret"
+	"github.com/samuel-stidham/safetybox/v3/internal/secret"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

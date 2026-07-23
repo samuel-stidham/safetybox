@@ -73,13 +73,16 @@ type Resolved struct {
 
 // Entry is one secret selected for batch resolution, carrying the
 // envelope of its newest enabled version. EnvName is empty when the
-// secret has none.
+// secret has none. EnvNameValid distinguishes a NULL env name column
+// from a present empty one, which the store never writes, so a read can
+// treat a valid-but-empty column as tampering.
 type Entry struct {
-	Name      string
-	EnvName   string
-	Version   int64
-	ExpiresAt *time.Time
-	Envelope  []byte
+	Name         string
+	EnvName      string
+	EnvNameValid bool
+	Version      int64
+	ExpiresAt    *time.Time
+	Envelope     []byte
 }
 
 // Expired reports whether the entry is past its expiry at now, the
@@ -98,9 +101,12 @@ type EntryFilter struct {
 	EnvNamed bool
 }
 
-// Sealer produces a sealed envelope for a canonical address. The
-// vault never sees plaintext, so sealing is injected by the caller.
-type Sealer func(address string) ([]byte, error)
+// Sealer produces a sealed envelope for a canonical address, binding
+// the given env name and expiry into it so a read can detect a
+// metadata edit. Empty envName or expiresAt means the secret carries
+// none. The vault never sees plaintext, so sealing is injected by the
+// caller.
+type Sealer func(address, envName, expiresAt string) ([]byte, error)
 
 // Resealer re-encrypts an existing envelope during rekey.
 type Resealer func(name string, number int64, envelope []byte) ([]byte, error)

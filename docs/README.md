@@ -31,5 +31,6 @@ the order you would need them.
   pipeline.
 - [Linting policy](linting.md) records every linter exception and its
   reason.
-- [Roadmap](roadmap.md) tracks the security work planned for after
-  2.0.0.
+- [Roadmap](roadmap.md) is closed and kept as a record of the earlier
+  review items. From 3.0.0 on, bugs and security findings are tracked
+  as [GitHub issues](https://github.com/samuel-stidham/safetybox/issues).

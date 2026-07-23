@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samuel-stidham/safetybox/v2/internal/vault"
+	"github.com/samuel-stidham/safetybox/v3/internal/vault"
 
 	"filippo.io/age"
 	"github.com/stretchr/testify/assert"

@@ -14,7 +14,7 @@ If you want the terse version of any command, the
 You need Go 1.26 or later to build from source.
 
 ```sh
-go install github.com/samuel-stidham/safetybox/v2@latest
+go install github.com/samuel-stidham/safetybox/v3@latest
 ```
 
 That puts `safetybox` in `$GOPATH/bin`, which is `~/go/bin` by default.
@@ -351,7 +351,33 @@ stored recipient does not match your identity, every read refuses with a
 clear error rather than a confusing decryption failure. That guards
 against a tampered vault and against pointing the wrong identity at it.
 
-## 19. Where to go next
+## 19. Upgrade an older vault with migrate
+
+If you came to 3.0 from safetybox 1.x or 2.x, your vault is in the old
+on-disk format and 3.0 refuses to open it until you migrate. The 3.0
+format seals each secret's env name and expiry into its envelope, so a
+later edit to those columns is caught on read.
+
+```sh
+safetybox migrate
+```
+
+migrate prompts for your passphrase, re-seals every secret into the new
+format in one transaction, and bumps the format version. Your names,
+values, and versions are unchanged. Back up the vault file first. Stop
+anything else that touches the vault, especially a script still on the
+old binary, or a racing write can strand an unreadable version. Run
+it once. A vault already at the current format, like the one you just
+created, reports that and does nothing.
+
+For automation, the passphrase can come from `--passphrase-file`,
+including a process substitution.
+
+```sh
+safetybox migrate --passphrase-file (secret-get safetybox-passphrase | psub)
+```
+
+## 20. Where to go next
 
 You have now run every command safetybox has. For the precise contract
 of each verb, read the [command reference](commands.md). To understand

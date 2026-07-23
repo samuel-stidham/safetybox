@@ -6,17 +6,17 @@ stdout, pretty by default and compact with `--json`. Warnings and
 prompts go to stderr.
 
 Verbs that decrypt need your identity passphrase: get, reveal, exec,
-passwd, and rekey. Verbs that only write or read metadata never ask
-for it: set, show, list, stale, disable, delete, and purge. That
+passwd, rekey, and migrate. Verbs that only write or read metadata never
+ask for it: set, show, list, stale, disable, delete, and purge. That
 asymmetry is the point of storing the public recipient in the vault.
 
 Two guards apply. safetybox warns on stderr when the vault file, its
 directory, or its write-ahead siblings grant group or world access,
 since names and timestamps are plaintext columns. And every verb that
-reads the vault, get, reveal, exec, and rekey, refuses when the stored
-recipient does not match your identity, which flags a tampered vault or
-the wrong identity before a confusing decryption error. passwd touches
-only the identity file, so it makes no such check.
+reads the vault, get, reveal, exec, rekey, and migrate, refuses when the
+stored recipient does not match your identity, which flags a tampered
+vault or the wrong identity before a confusing decryption error. passwd
+touches only the identity file, so it makes no such check.
 
 ## init
 
@@ -69,10 +69,12 @@ monotonic and never reused, even across delete and revive.
 safetybox get <name>
 ```
 
-Decrypts the newest enabled version, verifies its address binding,
-and prints metadata. The value field always reads `[REDACTED]`. Use
-get in scripts that need to know a secret resolves without ever
-printing it. Expired secrets warn on stderr and still resolve.
+Decrypts the newest enabled version, verifies its address and metadata
+binding, and prints metadata. The value field always reads `[REDACTED]`.
+Use get in scripts that need to know a secret resolves without ever
+printing it. A metadata edit or a sealed value that no longer matches the
+env name or expiry columns fails the read. Expired secrets warn on stderr
+and still resolve.
 
 ```json
 {"name":"api/stripe/live","version":2,"state":"enabled","envName":"STRIPE_KEY","createdAt":"2026-07-12T17:35:17Z","updatedAt":"2026-07-12T17:36:46Z","expired":false,"value":"[REDACTED]"}
@@ -88,7 +90,10 @@ safetybox reveal --env --format fish | source
 safetybox reveal --prefix projects/myapp --format sh
 ```
 
-The single verb that prints plaintext. Everything else redacts.
+The single verb that prints plaintext. Everything else redacts. It
+verifies the address and metadata binding before printing. A value whose
+sealed env name or expiry no longer matches the columns is refused for
+an explicit name. A filter selection skips it instead.
 
 One name prints one JSON object, unchanged from earlier releases.
 `--json` compacts the JSON output and cannot be combined with
@@ -112,8 +117,11 @@ The match is exact and case-sensitive, never a pattern, so `_` and
 `%` in a name are ordinary characters. A trailing slash on the prefix
 is allowed and means the same thing. The two filters compose, and
 filters cannot be mixed with explicit names. Batch JSON output is an
-array. An explicit name that does not resolve fails the whole batch.
-A filter that matches nothing prints an empty array.
+array. An explicit name that does not resolve, or whose metadata no
+longer matches its sealed value, fails the whole batch. A
+filter-selected secret with that same mismatch is skipped with a warning
+on stderr, so one stale secret never denies the rest. A filter that
+matches nothing prints an empty array.
 
 `--format sh` and `--format fish` emit assignment lines ready to
 source into a shell session, using the env name recorded by set.
@@ -242,9 +250,11 @@ An env name stored before set validated them may not be a legal
 variable name. exec skips such a secret with a warning instead of
 injecting a malformed entry. A value that holds a NUL byte cannot
 become an environment variable either, so exec skips it with a warning
-that names it and runs the command with the rest. When two secrets
-share an env name the later one wins in the child environment, and
-exec warns about the override.
+that names it and runs the command with the rest. A secret whose sealed
+env name or expiry no longer matches its columns is skipped the same
+way. One such mismatch never denies every variable to the child. When
+two secrets share an env name the later one wins in the child
+environment, and exec warns about the override.
 
 ## passwd
 
@@ -295,6 +305,54 @@ when another process blocks the scrub.
 
 ```json
 {"recipient":"age1...","rekeyedVersions":4,"backupIdentity":"~/.config/safetybox/identity.age.bak"}
+```
+
+## migrate
+
+```sh
+safetybox migrate
+```
+
+Upgrades a vault from an older safetybox to the current on-disk format.
+The current format seals each secret's env name and expiry into its
+envelope, so a later edit to those columns is caught on read. migrate
+re-seals every secret into that format and bumps the format version.
+
+It needs the passphrase, because re-sealing decrypts each value. The
+passphrase comes from the prompt or the global `--passphrase-file`,
+which accepts a process substitution such as
+`(secret-get name | psub)`. The identity and the recipient do not
+change, only the envelopes are re-framed. Like the read verbs, migrate
+refuses when the vault's stored recipient does not match your identity,
+before it re-seals anything.
+
+Everything runs in one transaction. A crash mid-migration rolls back
+and leaves the old vault intact. Back up the vault file first. A vault
+already at the current format reports that and does nothing.
+
+migrate holds an exclusive lock on a `vault.db.lock` sibling for its
+whole run, so two migrates on one vault can never interleave. A second
+run refuses up front while one is active, rather than blocking on the
+database write lock and failing with a raw busy error. The empty lock
+file is a permanent, harmless sibling of the vault, the same design the
+identity lock uses for rekey and passwd.
+
+The lock only guards against other migrates. Stop any older safetybox
+binary, such as a script still on 2.x, before you run migrate. The old
+binary checks the format only when it opens the vault. A 2.x `set`
+racing the migration can therefore append a legacy envelope just after
+the upgrade commits. The write succeeds silently, and the next read of
+that secret fails with a tamper-shaped error. Re-running migrate
+reports the vault as already current, so it cannot repair the row.
+Re-set the secret instead.
+
+An env name stored by a very old safetybox could contain a newline,
+which the new format cannot carry. migrate strips the newline, warns
+naming the secret, and stores the cleaned name, so such a vault still
+upgrades. A trailing newline, the usual cause, leaves the intended name.
+
+```json
+{"migratedVersions":12,"result":"migrated"}
 ```
 
 ## version

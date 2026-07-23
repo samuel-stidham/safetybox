@@ -119,6 +119,11 @@ linters:
   exclusions:
     # Test-file exclusions are justified linter by linter in
     # docs/linting.md. Add nothing here without a matching entry.
+    # File-specific paths use the (^|/) prefix, not a leading ^, so they
+    # match whether golangci-lint reports a repo-relative path or one
+    # prefixed by the working directory. Running from a differently cased
+    # path on a case-insensitive filesystem, such as code vs Code on
+    # macOS, produces a ../../.. prefix that a ^ anchor would miss.
     rules:
       - path: _test\.go
         linters:
@@ -143,7 +148,7 @@ linters:
       # runs reveal's own quoted output in a real shell to prove the
       # quoting is injection-safe. G204 stays active for every other
       # test. See docs/linting.md.
-      - path: ^cmd/review_fixes_internal_test\.go$
+      - path: (^|/)cmd/review_fixes_internal_test\.go$
         text: "G204"
         linters:
           - gosec
@@ -152,7 +157,7 @@ linters:
       # the reader under test detects end of input from it. wrapcheck
       # stays active for every other error in tests. See
       # docs/linting.md.
-      - path: ^internal/secret/secret_test\.go$
+      - path: (^|/)internal/secret/secret_test\.go$
         text: 'sig: func \(io\.Reader\)\.Read'
         linters:
           - wrapcheck
@@ -160,7 +165,7 @@ linters:
       # argv, which is its entire purpose, so the input is not tainted.
       # G204 stays active everywhere else in production. See
       # docs/linting.md.
-      - path: ^cmd/exec\.go$
+      - path: (^|/)cmd/exec\.go$
         text: "G204"
         linters:
           - gosec
@@ -175,7 +180,7 @@ formatters:
     gci:
       sections:
         - standard
-        - prefix(github.com/samuel-stidham/safetybox/v2)
+        - prefix(github.com/samuel-stidham/safetybox/v3)
         - default
       # Without this, gci ignores the section order above and puts
       # the prefix group last, undoing the Makefile's gci target.

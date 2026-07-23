@@ -82,7 +82,7 @@ Local adversarial reviews, when run, write their reports to the repo
 root and keep them out of git. The two reviewer passes produce
 `REPORT-A.md` and `REPORT-B.md`, and the combined report is `REPORT.md`.
 These report names are always uppercase, and `.gitignore` excludes
-them. `REVIEW.md` is the tracked policy file, never a report.
+them.
 
 ## Releases
 
