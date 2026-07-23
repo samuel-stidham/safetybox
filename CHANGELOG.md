@@ -61,6 +61,9 @@ release.
 - The metadata tamper error names the specific mismatch, the env name or
   the expiry, instead of repeating the summary phrase. That makes an
   explicit-read failure easier to scan.
+- `Seal` checks its framed fields, the address, env name, and expiry, in
+  a fixed order. A newline in more than one field now names the first
+  such field deterministically, where a map range randomized it before.
 
 ### Upgrading
 

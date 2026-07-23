@@ -66,6 +66,23 @@ func TestSealRejectsNewlineInBound(t *testing.T) {
 	require.ErrorIs(t, err, envelope.ErrInvalidFrame)
 }
 
+// TestSealReportsFirstInvalidFieldDeterministically pins that when more
+// than one framed field carries a newline, Seal reports the same field
+// every time, the first in its fixed check order. A map range would
+// randomize which field is named, so the seal is repeated to catch that.
+func TestSealReportsFirstInvalidFieldDeterministically(t *testing.T) {
+	identity := newTestIdentity(t)
+
+	bound := envelope.Bound{EnvName: "FAKE\nKEY", ExpiresAt: "2030\n01"}
+
+	for range 20 {
+		_, err := envelope.Seal(identity.Recipient(), "api/v1/bad\naddr/1", bound, secret.New([]byte(fakePlaintext)))
+		require.ErrorIs(t, err, envelope.ErrInvalidFrame)
+		assert.ErrorContains(t, err, "address has a newline",
+			"address is checked first, so it must be reported on every run")
+	}
+}
+
 // TestSealOpenRoundTripLargeValue pins the round trip for payloads past
 // the wiping reader's 512-byte growth boundary.
 func TestSealOpenRoundTripLargeValue(t *testing.T) {

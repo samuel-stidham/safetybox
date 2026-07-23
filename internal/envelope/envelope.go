@@ -50,9 +50,16 @@ type Bound struct {
 
 // Seal encrypts value to recipient, binding it to address and to bound.
 func Seal(recipient age.Recipient, address string, bound Bound, value secret.Value) ([]byte, error) {
-	for label, field := range map[string]string{"address": address, "env name": bound.EnvName, "expiry": bound.ExpiresAt} {
-		if strings.ContainsRune(field, '\n') {
-			return nil, fmt.Errorf("seal %s: %s has a newline: %w", address, label, ErrInvalidFrame)
+	// Check the framed fields in a fixed order, so a newline is reported
+	// against a deterministic field. A map range would randomize which
+	// field is named when more than one carries a newline.
+	for _, framed := range []struct{ label, field string }{
+		{"address", address},
+		{"env name", bound.EnvName},
+		{"expiry", bound.ExpiresAt},
+	} {
+		if strings.ContainsRune(framed.field, '\n') {
+			return nil, fmt.Errorf("seal %s: %s has a newline: %w", address, framed.label, ErrInvalidFrame)
 		}
 	}
 
