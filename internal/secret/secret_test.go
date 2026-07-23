@@ -227,3 +227,38 @@ func TestNewCopiesInput(t *testing.T) {
 
 	assert.Equal(t, []byte(fakePlaintext), value.Expose())
 }
+
+// TestDestroyZeroesPlaintext pins that Destroy wipes the backing array
+// and drops the reference, so Expose returns nil afterward.
+func TestDestroyZeroesPlaintext(t *testing.T) {
+	value := secret.New([]byte(fakePlaintext))
+	exposed := value.Expose()
+
+	value.Destroy()
+
+	assert.Nil(t, value.Expose(), "Destroy must drop the reference")
+
+	for i, b := range exposed {
+		assert.Equal(t, byte(0), b, "byte %d must be zeroed", i)
+	}
+}
+
+// TestDestroyWipesCopies pins that copies share one backing array, so a
+// single Destroy wipes every copy of the Value.
+func TestDestroyWipesCopies(t *testing.T) {
+	value := secret.New([]byte(fakePlaintext))
+	copyOfValue := value
+
+	value.Destroy()
+
+	assert.Nil(t, copyOfValue.Expose(), "Destroy on one copy must wipe them all")
+}
+
+// TestDestroyIsIdempotent pins that a second Destroy is safe.
+func TestDestroyIsIdempotent(t *testing.T) {
+	value := secret.New([]byte(fakePlaintext))
+
+	value.Destroy()
+
+	assert.NotPanics(t, func() { value.Destroy() })
+}

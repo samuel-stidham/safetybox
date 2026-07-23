@@ -33,7 +33,9 @@ picks the canonical address and stays free of crypto imports.
 encoding, and slog cannot leak by accident. Plaintext exits only
 through `Expose`, and the call sites are the reveal output, the exec
 environment, and the envelope seal path. Never add another exit and
-never move the type into a shared package.
+never move the type into a shared package. `Destroy` zeroes the held
+bytes, and the decrypt paths call it as soon as the value is copied
+out, so a plaintext copy does not sit on the heap for the whole run.
 
 ## Data model
 
@@ -70,6 +72,12 @@ non-deleted secret. Updates append rather than replace, so two
 versions being enabled at once is the designed overlap window for
 rotation. disable removes a version from resolution without
 destroying anything. Only purge destroys.
+
+Before decrypting, every read verb compares the vault's stored
+recipient to the loaded identity and refuses on a mismatch. The write
+path holds no identity, so it cannot make this check. That is why the
+recipient guard lives on the read side, and why it detects a tampered
+recipient rather than preventing the write that follows one.
 
 ## Format version and migrations
 

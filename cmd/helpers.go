@@ -15,6 +15,27 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// warnLooseVaultPerms warns once per invocation when the vault file,
+// its directory, or its WAL siblings grant group or world access. It
+// runs from PersistentPreRun, so it fires for whatever verb runs,
+// including ones that never open the vault such as passwd, without
+// threading a warning through each open. A resolve error is left to the
+// verb itself to surface, and a missing vault, the normal case before
+// init, produces no warning.
+func warnLooseVaultPerms(cobraCmd *cobra.Command, opts *options) {
+	path, err := opts.resolveVaultPath()
+	if err != nil {
+		return
+	}
+
+	for _, loose := range vault.LoosePermissions(path) {
+		printStderr(cobraCmd, fmt.Sprintf(
+			"warning: %s %s has mode %04o, group or world can access it: run chmod %04o on it\n",
+			loose.Label, loose.Path, loose.Mode, loose.Recommend,
+		))
+	}
+}
+
 // openVault resolves the vault path and opens it with a user-facing
 // hint on failure.
 func (o *options) openVault() (*vault.Vault, error) {
@@ -109,12 +130,36 @@ func completeInterruptedRekey(identityPath string) error {
 	return nil
 }
 
+// verifyRecipient refuses when the vault's stored recipient does not
+// match the loaded identity. A vault-write attacker can swap the
+// recipient so later writes seal to their key. The write path cannot
+// catch that, because it never holds the identity, so the read path
+// raises the alarm the moment the identity is present, even for old
+// versions that still decrypt cleanly under the original key.
+func verifyRecipient(expectedRecipient string, key *age.X25519Identity) error {
+	if expectedRecipient == key.Recipient().String() {
+		return nil
+	}
+
+	// The same mismatch has three innocent-to-hostile causes: a
+	// tampered vault_meta, an interrupted rekey that left the old
+	// identity in place, or simply the wrong identity. Name all three,
+	// including the interrupted-rekey hint the decrypt path used to give.
+	return fmt.Errorf(
+		"%w: the vault may have been tampered with, or an interrupted rekey left the "+
+			"wrong identity in place, check for a .new sibling of the identity file",
+		ErrRecipientMismatch,
+	)
+}
+
 // forEachDecrypted unlocks the identity once and opens every entry's
 // envelope with it, calling fn with the entry and its plaintext. It
 // is the single batch decrypt path, shared by exec and reveal, so a
 // batch pays the passphrase KDF exactly one time and both verbs stay
-// on one address-verification and expiry-warning behavior.
-func forEachDecrypted(cobraCmd *cobra.Command, opts *options, entries []vault.Entry,
+// on one address-verification and expiry-warning behavior. It refuses
+// before decrypting anything when the stored recipient does not match
+// the identity.
+func forEachDecrypted(cobraCmd *cobra.Command, opts *options, expectedRecipient string, entries []vault.Entry,
 	visit func(entry vault.Entry, expired bool, value secret.Value) error,
 ) error {
 	key, cleanup, err := loadIdentity(cobraCmd, opts)
@@ -123,6 +168,10 @@ func forEachDecrypted(cobraCmd *cobra.Command, opts *options, entries []vault.En
 	}
 
 	defer cleanup()
+
+	if err := verifyRecipient(expectedRecipient, key); err != nil {
+		return err
+	}
 
 	now := nowUTC()
 
@@ -139,8 +188,15 @@ func forEachDecrypted(cobraCmd *cobra.Command, opts *options, entries []vault.En
 			warnExpired(cobraCmd, entry.Name, entry.ExpiresAt)
 		}
 
-		if err := visit(entry, expired, value); err != nil {
-			return err
+		visitErr := visit(entry, expired, value)
+
+		// The visitor has copied the plaintext into output or the child
+		// environment by now, so wipe this decrypted copy rather than
+		// leave it on the heap for the rest of the run.
+		value.Destroy()
+
+		if visitErr != nil {
+			return visitErr
 		}
 	}
 
@@ -165,10 +221,16 @@ func resolveNewest(cobraCmd *cobra.Command, opts *options, name string) (*resolv
 
 	newest, err := openedVault.NewestEnabled(name)
 
+	recipient, recipientErr := openedVault.Recipient()
+
 	_ = openedVault.Close()
 
 	if err != nil {
 		return nil, userHint(err)
+	}
+
+	if recipientErr != nil {
+		return nil, fmt.Errorf("read stored recipient: %w", recipientErr)
 	}
 
 	key, cleanup, err := loadIdentity(cobraCmd, opts)
@@ -177,6 +239,10 @@ func resolveNewest(cobraCmd *cobra.Command, opts *options, name string) (*resolv
 	}
 
 	defer cleanup()
+
+	if err := verifyRecipient(recipient, key); err != nil {
+		return nil, err
+	}
 
 	address := vault.CanonicalAddress(name, newest.Version.Number)
 

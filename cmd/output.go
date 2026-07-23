@@ -32,7 +32,13 @@ func printJSON(cobraCmd *cobra.Command, opts *options, payload any) error {
 		return fmt.Errorf("encode output: %w", err)
 	}
 
-	_, _ = fmt.Fprintln(cobraCmd.OutOrStdout(), string(encoded))
+	// A discarded write error here would let a full disk or a broken
+	// pipe exit 0 with truncated output, which a consuming script reads
+	// as success. reveal's shell-assignment path already checks its
+	// writes, so this keeps the JSON path consistent with it.
+	if _, err := fmt.Fprintln(cobraCmd.OutOrStdout(), string(encoded)); err != nil {
+		return fmt.Errorf("write output: %w", err)
+	}
 
 	return nil
 }

@@ -8,6 +8,7 @@ package vault
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,8 +25,12 @@ const (
 	vaultFileMode = 0o600
 	vaultDirMode  = 0o700
 
+	metaTableName        = "vault_meta"
 	metaKeyFormatVersion = "format_version"
 	metaKeyRecipient     = "recipient"
+
+	// unsafeBits are the group and world permission bits.
+	unsafeBits = 0o077
 )
 
 // Vault is an open handle to a vault database.
@@ -102,11 +107,36 @@ func Open(path string) (*Vault, error) {
 
 	vault := &Vault{handle: handle, path: path}
 
+	// A file that opens as SQLite but lacks the vault_meta table is a
+	// half-created or non-vault file. Distinguish that from an
+	// operational error, such as a locked or unreadable database, which
+	// must not be reported as corrupt, because the recovery advice is to
+	// move the file aside.
+	hasMeta, err := vault.tableExists(metaTableName)
+	if err != nil {
+		_ = handle.Close()
+
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+
+	if !hasMeta {
+		_ = handle.Close()
+
+		return nil, fmt.Errorf("open %s: %w", path, ErrVaultCorrupt)
+	}
+
 	version, err := vault.metaValue(metaKeyFormatVersion)
 	if err != nil {
 		_ = handle.Close()
 
-		return nil, fmt.Errorf("read format version: %w", err)
+		// The table exists but its version row is missing, so the
+		// metadata is incomplete. Any other error is operational and
+		// passes through unwrapped.
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("open %s: %w", path, ErrVaultCorrupt)
+		}
+
+		return nil, fmt.Errorf("open %s: read format version: %w", path, err)
 	}
 
 	if version != strconv.Itoa(formatVersion) {
@@ -140,6 +170,25 @@ func (v *Vault) Recipient() (string, error) {
 	}
 
 	return recipient, nil
+}
+
+// tableExists reports whether a table of the given name is present in
+// the schema. It separates a half-created vault, a missing table, from
+// an operational error hit while reading the database.
+func (v *Vault) tableExists(name string) (bool, error) {
+	var found string
+
+	err := v.handle.QueryRowContext(context.Background(),
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("check %s table: %w", name, err)
+	}
+
+	return true, nil
 }
 
 func (v *Vault) metaValue(key string) (string, error) {
@@ -223,6 +272,61 @@ func initSchema(handle *sql.DB, recipient string) error {
 	}
 
 	return nil
+}
+
+// LoosePermission names one vault-related file whose mode grants group
+// or world access, for the cmd layer to warn about. Path is the file
+// or directory, and Recommend is the mode it should carry.
+type LoosePermission struct {
+	Label     string
+	Path      string
+	Mode      os.FileMode
+	Recommend os.FileMode
+}
+
+// LoosePermissions returns a [LoosePermission] for each vault-related
+// path that grants group or world access: the database file, its
+// containing directory, and the -wal and -shm siblings. It never
+// prints, so the cmd layer owns the warning, and it skips a path that
+// does not exist. Unlike the identity file, which gates key material
+// and is refused when loose, the vault holds ciphertext and public
+// metadata, so a loose vault is reported rather than blocked.
+func LoosePermissions(path string) []LoosePermission {
+	path = filepath.Clean(path)
+
+	targets := []struct {
+		label     string
+		path      string
+		recommend os.FileMode
+	}{
+		{"vault file", path, vaultFileMode},
+		{"vault directory", filepath.Dir(path), vaultDirMode},
+		{"vault write-ahead log", path + "-wal", vaultFileMode},
+		{"vault shared-memory file", path + "-shm", vaultFileMode},
+	}
+
+	var loose []LoosePermission
+
+	for _, target := range targets {
+		info, err := os.Stat(target.path)
+		if err != nil {
+			continue
+		}
+
+		perm := info.Mode().Perm()
+		if perm&unsafeBits == 0 {
+			continue
+		}
+
+		loose = append(loose, LoosePermission{
+			Label:     target.label,
+			Path:      target.path,
+			Mode:      perm,
+			Recommend: target.recommend,
+		})
+	}
+
+	return loose
 }
 
 // RemoveFiles deletes a vault database and its WAL siblings, best

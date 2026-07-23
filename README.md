@@ -73,6 +73,8 @@ The full documentation lives in [docs/](docs/).
 
 - [Getting started](docs/getting-started.md) takes you from install to
   your first rotated secret.
+- [Tutorial](docs/tutorial.md) is the guided tour, from install through
+  every command in order, including moving a vault between machines.
 - [Command reference](docs/commands.md) covers every verb, flag, and
   output shape.
 - [Configuration](docs/configuration.md) covers paths, precedence, and

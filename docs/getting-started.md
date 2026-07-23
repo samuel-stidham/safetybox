@@ -82,9 +82,25 @@ Updates append a new version. The old version stays enabled so
 consumers keep working during the rollout. When the rollout is done,
 disable the old version or pass `--revoke-previous` on the next set.
 
+## Move it to another machine
+
+To read your secrets on another machine, copy both files. The vault
+alone cannot decrypt anything.
+
+```sh
+scp ~/.local/share/safetybox/vault.db newhost:~/.local/share/safetybox/
+scp ~/.config/safetybox/identity.age newhost:~/.config/safetybox/
+```
+
+On the new machine, get and reveal prompt for the same passphrase you
+set at init. If you copy only the vault, you can still write new
+secrets and read metadata, but every attempt to read a value fails,
+because the private key never left the identity file.
+
 ## Where to go next
 
-The [command reference](commands.md) covers every verb and flag. The
-[security model](security.md) explains what safetybox protects and
-how. The [configuration guide](configuration.md) covers paths and
-environment variables.
+The [tutorial](tutorial.md) walks through every command in order, from
+install to key rotation. The [command reference](commands.md) covers
+every verb and flag. The [security model](security.md) explains what
+safetybox protects and how. The [configuration guide](configuration.md)
+covers paths and environment variables.

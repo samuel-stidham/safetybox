@@ -224,7 +224,10 @@ func upsertSecret(ctx context.Context, txn *sql.Tx, name string, opts SetOptions
 
 	expiresAt := row.expiresAt
 
-	if opts.ExpiresAt != nil {
+	switch {
+	case opts.ClearExpiry:
+		expiresAt = sql.NullString{}
+	case opts.ExpiresAt != nil:
 		expiresAt = sql.NullString{String: formatTime(*opts.ExpiresAt), Valid: true}
 	}
 
@@ -528,10 +531,23 @@ func (v *Vault) SoftDelete(name string) error {
 
 	now := formatTime(time.Now().UTC())
 
-	_, err = v.handle.ExecContext(ctx,
-		"UPDATE secret SET deleted_at = ?, updated_at = ? WHERE id = ?", now, now, row.id)
+	// The deleted_at IS NULL guard makes the update self-checking, the
+	// same pattern Disable uses. A second racing delete or a purge that
+	// lands between the read above and this statement affects zero rows
+	// rather than overwriting the first tombstone's timestamp.
+	outcome, err := v.handle.ExecContext(ctx,
+		"UPDATE secret SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL", now, now, row.id)
 	if err != nil {
 		return fmt.Errorf("delete secret %s: %w", name, err)
+	}
+
+	changed, err := outcome.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete secret %s: %w", name, err)
+	}
+
+	if changed == 0 {
+		return fmt.Errorf("secret %s: %w", name, ErrSecretDeleted)
 	}
 
 	return nil
@@ -596,11 +612,11 @@ func (v *Vault) Purge(name string) (int64, error) {
 // contention, but a reader in ANOTHER process can still block the
 // truncate. The pragma reports that as busy=1 with no SQL error, so
 // the result row is read rather than discarded and a blocked
-// checkpoint surfaces as ErrCheckpointBlocked. Purge and Rekey treat
-// any failure as best effort because the destructive operation is
-// already committed. Callers that must know the scrub happened, such
-// as the purge and rekey verbs warning the user, call this again and
-// check the error.
+// checkpoint surfaces as [ErrCheckpointBlocked]. [Vault.Purge] and
+// [Vault.Rekey] treat any failure as best effort because the
+// destructive operation is already committed. Callers that must know
+// the scrub happened, such as the purge and rekey verbs warning the
+// user, call this again and check the error.
 func (v *Vault) Checkpoint() error {
 	var busy, logFrames, checkpointed int64
 

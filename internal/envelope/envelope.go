@@ -2,7 +2,7 @@
 // their vault address.
 //
 // The plaintext inside every envelope is prefixed with its canonical
-// address (api/v1/<name>/<version>) and a newline. Open verifies the
+// address (api/v1/<name>/<version>) and a newline. [Open] verifies the
 // embedded address matches the row the blob was read from, which
 // binds ciphertext to its row and defeats envelope swapping.
 package envelope
@@ -56,7 +56,7 @@ func Seal(recipient age.Recipient, address string, value secret.Value) ([]byte, 
 
 // Open decrypts blob with identity and verifies it is bound to
 // address. The embedded address is stripped before the plaintext is
-// wrapped in a SecretValue.
+// wrapped in a [secret.Value].
 func Open(identity age.Identity, address string, blob []byte) (secret.Value, error) {
 	reader, err := age.Decrypt(bytes.NewReader(blob), identity)
 	if err != nil {

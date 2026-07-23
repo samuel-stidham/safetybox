@@ -182,6 +182,11 @@ func rekeyVault(cobraCmd *cobra.Command, opts *options, oldKey, newKey *age.X255
 				return nil, fmt.Errorf("open %s: %w", address, err)
 			}
 
+			// Wipe each decrypted value as soon as it is resealed, so a
+			// rekey does not hold every secret's plaintext on the heap
+			// for the length of the whole rotation.
+			defer value.Destroy()
+
 			resealed, err := envelope.Seal(newKey.Recipient(), address, value)
 			if err != nil {
 				return nil, fmt.Errorf("reseal %s: %w", address, err)

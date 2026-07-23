@@ -1,6 +1,8 @@
 package vault_test
 
 import (
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -228,6 +230,51 @@ func TestSoftDeleteTwiceFails(t *testing.T) {
 
 	require.NoError(t, testVault.SoftDelete("del/ete"))
 	require.ErrorIs(t, testVault.SoftDelete("del/ete"), vault.ErrSecretDeleted)
+}
+
+// TestSoftDeleteConcurrentKeepsOneTombstone covers B-9: the guarded
+// update makes exactly one racing delete win, so a second delete or a
+// purge cannot overwrite the first tombstone's timestamp. Without the
+// AND deleted_at IS NULL guard, interleaved deletes both report success.
+func TestSoftDeleteConcurrentKeepsOneTombstone(t *testing.T) {
+	testVault := openTestVault(t)
+
+	_, err := testVault.AppendVersion("race/delete", vault.SetOptions{}, fakeSealer(t))
+	require.NoError(t, err)
+
+	const workers = 8
+
+	var waitGroup sync.WaitGroup
+
+	results := make([]error, workers)
+
+	waitGroup.Add(workers)
+
+	for i := range workers {
+		go func(index int) {
+			defer waitGroup.Done()
+
+			results[index] = testVault.SoftDelete("race/delete")
+		}(i)
+	}
+
+	waitGroup.Wait()
+
+	var succeeded, alreadyDeleted int
+
+	for _, result := range results {
+		switch {
+		case result == nil:
+			succeeded++
+		case errors.Is(result, vault.ErrSecretDeleted):
+			alreadyDeleted++
+		default:
+			t.Fatalf("unexpected delete error: %v", result)
+		}
+	}
+
+	assert.Equal(t, 1, succeeded, "exactly one concurrent delete must win")
+	assert.Equal(t, workers-1, alreadyDeleted, "the rest must report already deleted")
 }
 
 func TestPurgeDestroysEnvelopes(t *testing.T) {

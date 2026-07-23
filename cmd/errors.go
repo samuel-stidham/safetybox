@@ -9,6 +9,12 @@ import (
 	"github.com/samuel-stidham/safetybox/internal/vault"
 )
 
+// ErrRecipientMismatch means the vault's stored recipient does not
+// match the loaded identity. That points at a tampered vault_meta
+// recipient, the attack the address binding does not cover, or simply
+// the wrong identity for this vault.
+var ErrRecipientMismatch = errors.New("vault recipient does not match your identity")
+
 // exitCodeError carries a child process exit code from exec back to
 // Execute. It is a struct error because the handler must read the
 // code, which a plain sentinel cannot carry.
@@ -34,6 +40,18 @@ func userHint(err error) error {
 	switch {
 	case errors.Is(err, vault.ErrVaultNotFound):
 		return fmt.Errorf("%w: run `safetybox init` first", err)
+	case errors.Is(err, vault.ErrVaultCorrupt):
+		return fmt.Errorf(
+			"%w: the file at the vault path looks half-created, likely from an "+
+				"interrupted init: inspect it, move it aside, then run `safetybox init`",
+			err,
+		)
+	case errors.Is(err, vault.ErrVaultExists):
+		return fmt.Errorf(
+			"%w: if a previous init was interrupted, this may be a half-created "+
+				"husk: inspect it and move it aside before retrying",
+			err,
+		)
 	case errors.Is(err, vault.ErrSecretDeleted):
 		return fmt.Errorf("%w: `set` a new value to revive it or `purge` it for good", err)
 	case errors.Is(err, vault.ErrVersionNotFound):
