@@ -337,6 +337,15 @@ database write lock and failing with a raw busy error. The empty lock
 file is a permanent, harmless sibling of the vault, the same design the
 identity lock uses for rekey and passwd.
 
+The lock only guards against other migrates. Stop any older safetybox
+binary, such as a script still on 2.x, before you run migrate. The old
+binary checks the format only when it opens the vault. A 2.x `set`
+racing the migration can therefore append a legacy envelope just after
+the upgrade commits. The write succeeds silently, and the next read of
+that secret fails with a tamper-shaped error. Re-running migrate
+reports the vault as already current, so it cannot repair the row.
+Re-set the secret instead.
+
 An env name stored by a very old safetybox could contain a newline,
 which the new format cannot carry. migrate strips the newline, warns
 naming the secret, and stores the cleaned name, so such a vault still

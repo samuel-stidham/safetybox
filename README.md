@@ -65,6 +65,13 @@ format in one transaction, and leaves your secret names, values, and
 versions unchanged. Back up the vault file first. Until you migrate,
 every other command tells you the vault needs it.
 
+Stop anything else that touches the vault before you migrate,
+especially a script or cron job still running the old binary. The old
+binary checks the format only when it opens the vault. A 2.x `set`
+racing the migration can therefore slip a legacy envelope in just
+after the upgrade commits, and the next read of that secret fails
+with a tamper-shaped error. Re-set the secret to repair it.
+
 ## Getting started
 
 Create your identity and vault.

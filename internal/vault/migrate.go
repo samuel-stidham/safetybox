@@ -178,6 +178,10 @@ func resealForMigration(ctx context.Context, migrated *Vault, reseal MigrationRe
 	}
 
 	if err := txn.Commit(); err != nil {
+		// Unlike rekey, an ambiguous commit needs no marker here. Rekey
+		// must keep its staged key when the commit may have landed, but
+		// a migrate rerun after a false failure lands on the clean
+		// already-current path and destroys nothing.
 		return 0, fmt.Errorf("commit migrate: %w", err)
 	}
 

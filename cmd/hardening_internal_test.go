@@ -576,7 +576,9 @@ func TestMigratePreservesVersionShapes(t *testing.T) {
 // envelope, so it must make the same recipient check every read verb
 // makes. A format 1 vault whose stored recipient was swapped is refused
 // before any re-seal, rather than quietly re-sealing to the loaded
-// identity and leaving the swap to surface on a later read.
+// identity and leaving the swap to surface on a later read. The refusal
+// carries the same tamper guidance the read verbs attach, so migrate
+// does not fail with a bare sentinel.
 func TestMigrateRefusesSwappedRecipient(t *testing.T) {
 	fixture := newCLIFixture(t)
 
@@ -591,6 +593,21 @@ func TestMigrateRefusesSwappedRecipient(t *testing.T) {
 
 	_, _, err = fixture.run("", "migrate")
 	require.ErrorIs(t, err, vault.ErrRecipientMismatch)
+	assert.ErrorContains(t, err, "tampered",
+		"migrate must attach the same recipient-mismatch guidance the read verbs give")
+}
+
+// TestAcquireMigrateLockMissingDirHintsInit mirrors the identity-lock
+// variant: the migrate lock is taken before the vault opens, so a
+// missing vault directory must surface the vault not-found hint that
+// points at init, not a raw error about the lock file.
+func TestAcquireMigrateLockMissingDirHintsInit(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "nodir", "vault.db")
+
+	_, err := acquireMigrateLock(missing)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, vault.ErrVaultNotFound)
 }
 
 // TestMigrateRefusesWhileMigrateLockIsHeld pins the concurrent-migrate

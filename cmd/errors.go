@@ -15,6 +15,13 @@ import (
 // the wrong identity for this vault.
 var ErrRecipientMismatch = errors.New("vault recipient does not match your identity")
 
+// recipientMismatchHint explains a recipient mismatch whichever layer
+// reports it: a tampered vault, an interrupted rekey, or the wrong
+// identity. verifyRecipient and userHint both attach it, so the read
+// verbs and migrate refuse with one voice.
+const recipientMismatchHint = "the vault may have been tampered with, or an interrupted rekey left the " +
+	"wrong identity in place, check for a .new sibling of the identity file"
+
 // ErrMetadataTampered means a plaintext column no longer matches the
 // metadata sealed into the newest version's envelope. A vault-write
 // attacker who edited the column without re-sealing the value is
@@ -43,6 +50,16 @@ func userHint(err error) error {
 		return hinted
 	}
 
+	if hinted := vaultHint(err); hinted != nil {
+		return hinted
+	}
+
+	return err
+}
+
+// vaultHint covers the vault sentinels, or returns nil when err is
+// none of them.
+func vaultHint(err error) error {
 	switch {
 	case errors.Is(err, vault.ErrVaultNotFound):
 		return fmt.Errorf("%w: run `safetybox init` first", err)
@@ -68,8 +85,12 @@ func userHint(err error) error {
 				"otherwise upgrade safetybox to open it",
 			err,
 		)
+	case errors.Is(err, vault.ErrRecipientMismatch):
+		// migrate surfaces the vault layer's recipient check. Attach the
+		// same guidance verifyRecipient gives the read verbs.
+		return fmt.Errorf("%w: %s", err, recipientMismatchHint)
 	default:
-		return err
+		return nil
 	}
 }
 

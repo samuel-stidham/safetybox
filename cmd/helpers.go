@@ -253,11 +253,7 @@ func verifyRecipient(expectedRecipient string, key *age.X25519Identity) error {
 	// tampered vault_meta, an interrupted rekey that left the old
 	// identity in place, or simply the wrong identity. Name all three,
 	// including the interrupted-rekey hint the decrypt path used to give.
-	return fmt.Errorf(
-		"%w: the vault may have been tampered with, or an interrupted rekey left the "+
-			"wrong identity in place, check for a .new sibling of the identity file",
-		ErrRecipientMismatch,
-	)
+	return fmt.Errorf("%w: %s", ErrRecipientMismatch, recipientMismatchHint)
 }
 
 // forEachDecrypted unlocks the identity once and opens every entry's
