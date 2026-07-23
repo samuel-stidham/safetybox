@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/samuel-stidham/safetybox/v2/internal/secret"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -81,7 +82,7 @@ func passphraseFromFile(passphraseFile string) ([]byte, error) {
 			passphraseFile, info.Mode().Perm())
 	}
 
-	content, err := io.ReadAll(file)
+	content, err := secret.ReadAllWiping(file)
 	if err != nil {
 		return nil, fmt.Errorf("read passphrase file: %w", err)
 	}
@@ -105,7 +106,7 @@ func promptOnce(cobraCmd *cobra.Command, label, noun string) ([]byte, error) {
 
 	printStderr(cobraCmd, label)
 
-	entered, err := term.ReadPassword(stdinFd)
+	entered, err := readLineNoEcho(stdinFd)
 
 	printStderr(cobraCmd, "\n")
 

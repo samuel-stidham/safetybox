@@ -3,11 +3,14 @@ package secret_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"testing"
+	"testing/iotest"
 
-	"github.com/samuel-stidham/safetybox/internal/secret"
+	"github.com/samuel-stidham/safetybox/v2/internal/secret"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -261,4 +264,104 @@ func TestDestroyIsIdempotent(t *testing.T) {
 	value.Destroy()
 
 	assert.NotPanics(t, func() { value.Destroy() })
+}
+
+// TestReadAllWiping pins that the wiping reader returns the exact input
+// across sizes that span its 512-byte growth boundary, so the wiping of
+// intermediate buffers never corrupts the content.
+func TestReadAllWiping(t *testing.T) {
+	for _, size := range []int{0, 1, 511, 512, 513, 1536, 5000} {
+		t.Run(fmt.Sprintf("size-%d", size), func(t *testing.T) {
+			want := bytes.Repeat([]byte("x"), size)
+
+			got, err := secret.ReadAllWiping(bytes.NewReader(want))
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+// TestReadAllWipingSurfacesReadError pins that a read failure is wrapped
+// and returned rather than swallowed.
+func TestReadAllWipingSurfacesReadError(t *testing.T) {
+	_, err := secret.ReadAllWiping(iotest.ErrReader(errors.New("boom")))
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "boom")
+}
+
+// TestReadAllWipingReturnsNothingOnError pins that a read failure hands
+// back no partial content. The bytes read before the failure would
+// otherwise sit unzeroed on the heap in a slice every caller discards.
+func TestReadAllWipingReturnsNothingOnError(t *testing.T) {
+	partial := io.MultiReader(
+		bytes.NewReader(bytes.Repeat([]byte("x"), 700)),
+		iotest.ErrReader(errors.New("boom")),
+	)
+
+	got, err := secret.ReadAllWiping(partial)
+
+	require.Error(t, err)
+	assert.Nil(t, got, "a failed read must not return partial content")
+}
+
+// TestReadAllWipingHandlesDataWithEOF pins the io.Reader contract shape
+// where the final data arrives together with io.EOF in one call.
+func TestReadAllWipingHandlesDataWithEOF(t *testing.T) {
+	want := bytes.Repeat([]byte("x"), 600)
+
+	got, err := secret.ReadAllWiping(iotest.DataErrReader(bytes.NewReader(want)))
+
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+// TestReadAllWipingTreatsWrappedEOFAsFailure pins io.ReadAll's exact
+// end-of-input contract: only a bare io.EOF is success. An error that
+// wraps io.EOF is a genuine failure, and reading it as a clean end
+// would silently return truncated secret data.
+func TestReadAllWipingTreatsWrappedEOFAsFailure(t *testing.T) {
+	torn := io.MultiReader(
+		bytes.NewReader(bytes.Repeat([]byte("x"), 100)),
+		iotest.ErrReader(fmt.Errorf("stream torn down: %w", io.EOF)),
+	)
+
+	got, err := secret.ReadAllWiping(torn)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, io.EOF, "the wrapped cause must stay inspectable")
+	assert.Nil(t, got, "a wrapped EOF must not return truncated content as success")
+}
+
+// windowCapturingReader keeps the first buffer window it is handed, so
+// a test can inspect the outgrown backing array after the read ends.
+type windowCapturingReader struct {
+	src      io.Reader
+	captured []byte
+}
+
+func (r *windowCapturingReader) Read(p []byte) (int, error) {
+	if r.captured == nil {
+		r.captured = p
+	}
+
+	return r.src.Read(p)
+}
+
+// TestReadAllWipingZeroesOutgrownBuffer pins the feature itself: after
+// the reader outgrows its first buffer, that buffer's bytes are zeroed
+// rather than left holding a secret prefix for the garbage collector.
+func TestReadAllWipingZeroesOutgrownBuffer(t *testing.T) {
+	input := bytes.Repeat([]byte("x"), 700)
+	reader := &windowCapturingReader{src: bytes.NewReader(input)}
+
+	got, err := secret.ReadAllWiping(reader)
+	require.NoError(t, err)
+	require.Equal(t, input, got, "content must survive the growth")
+
+	require.NotNil(t, reader.captured)
+
+	for i, b := range reader.captured {
+		require.Equal(t, byte(0), b, "outgrown buffer byte %d must be zeroed", i)
+	}
 }

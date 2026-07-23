@@ -139,6 +139,31 @@ linters:
         text: "(G301|G302|G304)"
         linters:
           - gosec
+      # G204 in one file only. The shell round-trip test deliberately
+      # runs reveal's own quoted output in a real shell to prove the
+      # quoting is injection-safe. G204 stays active for every other
+      # test. See docs/linting.md.
+      - path: ^cmd/review_fixes_internal_test\.go$
+        text: "G204"
+        linters:
+          - gosec
+      # wrapcheck, io.Reader.Read pass-through only. The wiping-reader
+      # test double must hand the source error through verbatim, since
+      # the reader under test detects end of input from it. wrapcheck
+      # stays active for every other error in tests. See
+      # docs/linting.md.
+      - path: ^internal/secret/secret_test\.go$
+        text: 'sig: func \(io\.Reader\)\.Read'
+        linters:
+          - wrapcheck
+      # G204 in cmd/exec.go only. The exec verb runs the operator's own
+      # argv, which is its entire purpose, so the input is not tainted.
+      # G204 stays active everywhere else in production. See
+      # docs/linting.md.
+      - path: ^cmd/exec\.go$
+        text: "G204"
+        linters:
+          - gosec
 
 formatters:
   enable:
@@ -150,7 +175,7 @@ formatters:
     gci:
       sections:
         - standard
-        - prefix(github.com/samuel-stidham/safetybox)
+        - prefix(github.com/samuel-stidham/safetybox/v2)
         - default
       # Without this, gci ignores the section order above and puts
       # the prefix group last, undoing the Makefile's gci target.

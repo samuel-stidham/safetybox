@@ -63,7 +63,6 @@ func TestRevealShellRoundTripsThroughRealShell(t *testing.T) {
 	t.Run("sh", func(t *testing.T) {
 		shOut, _ := fixture.runOK("", "reveal", "--env", "--format", "sh")
 
-		//nolint:gosec // deliberately sourcing the tool's own output in a real shell to prove quoting is injection-safe
 		out, err := exec.CommandContext(t.Context(), "sh", "-c", shOut+"\nprintf '%s' \"$FAKE_HOSTILE\"").Output()
 		require.NoError(t, err)
 		assert.Equal(t, hostile, string(out), "sh must read back the literal value")
@@ -77,7 +76,6 @@ func TestRevealShellRoundTripsThroughRealShell(t *testing.T) {
 
 		fishOut, _ := fixture.runOK("", "reveal", "--env", "--format", "fish")
 
-		//nolint:gosec // deliberately sourcing the tool's own output in a real shell to prove quoting is injection-safe
 		out, err := exec.CommandContext(t.Context(), fishBin, "-c", fishOut+"\nprintf '%s' \"$FAKE_HOSTILE\"").Output()
 		require.NoError(t, err)
 		assert.Equal(t, hostile, string(out), "fish must read back the literal value")

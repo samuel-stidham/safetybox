@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/samuel-stidham/safetybox/internal/envelope"
-	"github.com/samuel-stidham/safetybox/internal/secret"
+	"github.com/samuel-stidham/safetybox/v2/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v2/internal/secret"
 
 	"filippo.io/age"
 	"github.com/stretchr/testify/assert"
@@ -36,6 +36,21 @@ func TestSealOpenRoundTrip(t *testing.T) {
 	opened, err := envelope.Open(identity, testAddress, sealed)
 	require.NoError(t, err)
 	assert.Equal(t, []byte(fakePlaintext), opened.Expose())
+}
+
+// TestSealOpenRoundTripLargeValue pins the round trip for payloads past
+// the wiping reader's 512-byte growth boundary, so the drain that
+// zeroes its outgrown buffers never corrupts a larger plaintext.
+func TestSealOpenRoundTripLargeValue(t *testing.T) {
+	identity := newTestIdentity(t)
+	large := bytes.Repeat([]byte("fake-large-payload-not-real-"), 200)
+
+	sealed, err := envelope.Seal(identity.Recipient(), testAddress, secret.New(large))
+	require.NoError(t, err)
+
+	opened, err := envelope.Open(identity, testAddress, sealed)
+	require.NoError(t, err)
+	assert.Equal(t, large, opened.Expose())
 }
 
 func TestOpenWrongAddressFails(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"filippo.io/age"
 	"github.com/stretchr/testify/assert"
@@ -60,12 +60,12 @@ func TestInitEndToEnd(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o700), dirInfo.Mode().Perm())
 
 	// The vault opens and stores a parseable recipient.
-	openedVault, err := vault.Open(vaultPath)
+	openedVault, err := vault.Open(t.Context(), vaultPath)
 	require.NoError(t, err)
 
 	t.Cleanup(func() { assert.NoError(t, openedVault.Close()) })
 
-	recipient, err := openedVault.Recipient()
+	recipient, err := openedVault.Recipient(t.Context())
 	require.NoError(t, err)
 
 	_, err = age.ParseX25519Recipient(recipient)

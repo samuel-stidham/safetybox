@@ -27,4 +27,10 @@ var (
 	// ErrCheckpointBlocked means a WAL checkpoint could not truncate
 	// the log, usually because another process holds a read snapshot.
 	ErrCheckpointBlocked = errors.New("wal checkpoint blocked")
+	// ErrCommitAmbiguous means a commit reported an error after its
+	// record may already have become durable in the WAL, so whether
+	// the transaction landed is unknown. A failed fsync is the
+	// canonical case. Callers whose failure cleanup is destructive
+	// must not treat this as proof the transaction rolled back.
+	ErrCommitAmbiguous = errors.New("commit failed with unknown outcome")
 )

@@ -1,19 +1,93 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 
-	"github.com/samuel-stidham/safetybox/internal/envelope"
-	"github.com/samuel-stidham/safetybox/internal/identity"
-	"github.com/samuel-stidham/safetybox/internal/secret"
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v2/internal/identity"
+	"github.com/samuel-stidham/safetybox/v2/internal/secret"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
+	"golang.org/x/sys/unix"
 )
+
+// lockFileMode matches the identity file's private mode.
+const lockFileMode = 0o600
+
+// acquireIdentityLock serializes the verbs that rewrite the identity
+// file. Two interleaved rekeys share one staging path, so the second
+// deletes the first's staged key while the first commits the vault to
+// it, which destroys the only key able to read the vault. An exclusive
+// advisory lock on a .lock sibling closes that window for rekey and
+// passwd both. The kernel drops the lock when the process exits, so a
+// crash never wedges a later run. The empty lock file is left in place
+// on purpose: removing it would let a third process lock a fresh inode
+// while the second still holds the old one.
+func acquireIdentityLock(identityPath string) (func(), error) {
+	lockPath := filepath.Clean(identityLockPath(identityPath))
+
+	file, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, lockFileMode)
+	if err != nil {
+		// A missing parent directory means no identity was created here
+		// yet. Surface the same not-found hint the identity load gives,
+		// rather than a raw error about the lock file. The lock is taken
+		// before the load, so without this a first-run passwd or rekey
+		// would report the lock path instead of pointing at init.
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%s: %w", identityPath, identity.ErrNotFound)
+		}
+
+		return nil, fmt.Errorf("open identity lock %s: %w", lockPath, err)
+	}
+
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		_ = file.Close()
+
+		// EWOULDBLOCK is the one expected failure: another process
+		// holds the lock. Anything else is an environment problem,
+		// such as a filesystem without flock support, and must not
+		// masquerade as a concurrent run.
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, fmt.Errorf(
+				"another safetybox rekey or passwd is running against %s: retry when it finishes: %w",
+				identityPath, err,
+			)
+		}
+
+		return nil, fmt.Errorf("lock identity %s: %w", lockPath, err)
+	}
+
+	release := func() {
+		_ = unix.Flock(int(file.Fd()), unix.LOCK_UN)
+		_ = file.Close()
+	}
+
+	return release, nil
+}
+
+// identityLockPath derives the lock file path from the identity path.
+// It resolves symlinks so that two spellings of one identity, such as a
+// symlink alias, lock the same file and serialize against each other.
+// EvalSymlinks needs the file to exist, so before init it falls back to
+// an absolute path, and finally to a cleaned path.
+func identityLockPath(identityPath string) string {
+	if resolved, err := filepath.EvalSymlinks(identityPath); err == nil {
+		return resolved + ".lock"
+	}
+
+	if absolute, err := filepath.Abs(identityPath); err == nil {
+		return absolute + ".lock"
+	}
+
+	return filepath.Clean(identityPath + ".lock")
+}
 
 // warnLooseVaultPerms warns once per invocation when the vault file,
 // its directory, or its WAL siblings grant group or world access. It
@@ -38,13 +112,13 @@ func warnLooseVaultPerms(cobraCmd *cobra.Command, opts *options) {
 
 // openVault resolves the vault path and opens it with a user-facing
 // hint on failure.
-func (o *options) openVault() (*vault.Vault, error) {
+func (o *options) openVault(ctx context.Context) (*vault.Vault, error) {
 	path, err := o.resolveVaultPath()
 	if err != nil {
 		return nil, err
 	}
 
-	opened, err := vault.Open(path)
+	opened, err := vault.Open(ctx, path)
 	if err != nil {
 		return nil, userHint(err)
 	}
@@ -54,8 +128,8 @@ func (o *options) openVault() (*vault.Vault, error) {
 
 // storedRecipient reads and parses the vault's recipient. Write verbs
 // need nothing else, which is the point of the asymmetric model.
-func storedRecipient(openedVault *vault.Vault) (*age.X25519Recipient, error) {
-	stored, err := openedVault.Recipient()
+func storedRecipient(ctx context.Context, openedVault *vault.Vault) (*age.X25519Recipient, error) {
+	stored, err := openedVault.Recipient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read stored recipient: %w", err)
 	}
@@ -214,14 +288,16 @@ type resolved struct {
 // enabled version of name. It warns on stderr when the secret is
 // expired, and still resolves it.
 func resolveNewest(cobraCmd *cobra.Command, opts *options, name string) (*resolved, error) {
-	openedVault, err := opts.openVault()
+	ctx := cobraCmd.Context()
+
+	openedVault, err := opts.openVault(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	newest, err := openedVault.NewestEnabled(name)
+	newest, err := openedVault.NewestEnabled(ctx, name)
 
-	recipient, recipientErr := openedVault.Recipient()
+	recipient, recipientErr := openedVault.Recipient(ctx)
 
 	_ = openedVault.Close()
 

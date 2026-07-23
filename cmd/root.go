@@ -11,7 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/samuel-stidham/safetybox/internal/logging"
+	"github.com/samuel-stidham/safetybox/v2/internal/logging"
 
 	"github.com/awnumar/memguard"
 	"github.com/spf13/cobra"

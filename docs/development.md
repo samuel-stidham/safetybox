@@ -7,10 +7,11 @@ How to build, test, and release safetybox.
 `make help` lists every target. The daily loop is three commands.
 
 ```sh
-make dev    # build bin/safetybox with a -dev version suffix
-make lint   # gofumpt, gci, golangci-lint, all fixers on
-make test   # go test -race, with cgo on for the detector
-make vuln   # govulncheck against the dependency tree
+make dev       # build bin/safetybox with a -dev version suffix
+make lint      # gofumpt, gci, golangci-lint, all fixers on
+make test      # fast tests, for the local loop
+make test-race # tests under the race detector, needs cgo, what CI runs
+make vuln      # govulncheck against the dependency tree
 ```
 
 `make dev` builds into `bin/` and tags the version with `-dev` so a
@@ -27,9 +28,12 @@ Tests run against real SQLite databases in `t.TempDir()` and real
 age keys generated per test. There are no mocks. The cmd package
 carries an end-to-end suite that drives the CLI in process through
 init, set, rotation, disable, revoke, exec, rekey, passwd, delete,
-purge, and revive. `make test` runs the race detector, so it forces
-`CGO_ENABLED=1` for the test build even though the shipped binary is
-built with cgo disabled.
+purge, and revive. Because the suite exercises real age scrypt on
+every identity load, it is not instant, and the race detector makes it
+several times slower again. So `make test` runs without the detector
+for the local loop, and `make test-race` adds it. `make test-race`
+forces `CGO_ENABLED=1`, because the detector needs cgo, even though the
+shipped binary is built with cgo disabled. CI runs `make test-race`.
 
 Two conventions are non-negotiable. Every envelope test includes a
 corrupt-one-byte case asserting decryption fails. Test fixtures use
@@ -50,9 +54,11 @@ safetybox, then third-party, enforced by gci with custom order.
 
 This is a secrets tool, so every module in go.sum is audit surface.
 The dependency list is deliberately short: age, modernc sqlite,
-cobra, memguard, testify, and the x/crypto and x/term families.
-Justify any addition in the PR description. Dependencies are
-vendored.
+cobra, memguard, testify, and the x/crypto, x/term, and x/sys
+families. x/sys backs the no-echo prompt's terminal control. Justify
+any addition in the PR description. A `vendor/` directory may exist
+locally for offline builds. It stays untracked, and CI resolves
+modules from `go.sum`.
 
 ## Commits and CI
 
@@ -68,5 +74,8 @@ inspected for conventional commits. A feat commit bumps the minor
 version, a fix commit bumps the patch, and a breaking change bumps
 the major. The new tag triggers GoReleaser in the same workflow run,
 which builds static binaries for Linux and macOS on amd64 and arm64,
-generates checksums and a changelog, and publishes the GitHub
-release. A manually pushed `v*` tag releases the same way.
+generates checksums, and publishes the GitHub release. The release
+notes come from the `CHANGELOG.md` section for the tag, which CI
+extracts and passes to GoReleaser, so the generated commit-list
+changelog is disabled. A manually pushed `v*` tag releases the same
+way.

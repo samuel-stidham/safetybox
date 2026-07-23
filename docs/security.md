@@ -50,6 +50,17 @@ read, even for old versions that still decrypt. The write path holds no
 identity by design, so it cannot prevent the bad write. Detection on
 read is the guard, not prevention at write time.
 
+The address binding stops an attacker moving an existing envelope
+between rows. It does not authenticate the value's origin. The
+recipient is a public key, so an attacker with vault write access can
+seal a chosen plaintext to it with the correct embedded address and
+overwrite a row. That forged value decrypts cleanly and passes both the
+address check and the recipient check, because the vault still holds
+your recipient. Authenticating the value itself would need a signing
+secret at write time, which the asymmetric write model deliberately
+lacks so a producer machine never holds one. Treat vault write access
+as a serious compromise, and see the roadmap for the deferred fix.
+
 ## Files and permissions
 
 The vault file is created 0600 with WAL journaling, and SQLite gives
@@ -71,9 +82,12 @@ lock you out of your own data after a backup reset the mode.
 
 The decrypted identity is held in a memguard locked buffer for the
 duration of one invocation and wiped afterward. Passphrase buffers
-are zeroed after use. Go strings copied during parsing are outside
-that control, so this is hardening, not a guarantee against a
-debugger on your own machine.
+are zeroed after use. Every reader that touches secret material wipes
+each buffer it outgrows. That covers the no-echo prompt, the stdin
+and file readers, the identity loader, and the envelope decrypt path.
+A failed read wipes its partial buffer and returns nothing. Go
+strings copied during parsing are outside that control, so this is
+hardening, not a guarantee against a debugger on your own machine.
 
 ## Rotation and destruction
 
@@ -87,6 +101,12 @@ rekey verifies the vault is really encrypted to the loaded identity,
 so a rerun after an interrupted rotation can never discard the live
 staged key. Read verbs heal an interrupted swap on the next
 invocation.
+
+rekey and passwd hold an exclusive lock beside the identity for
+their whole run, so two rotations can never interleave and delete
+each other's staged key. A commit that errors after its record became
+durable is treated as ambiguous. rekey then keeps both key files and
+says to test which one opens the vault before deleting either.
 
 purge erases envelopes but keeps rows, so history shows a version
 existed without any way to recover its value. The vault runs with
@@ -105,19 +125,22 @@ process memory. safetybox is a careful single-user store, not an
 HSM. At-rest disk protection like FileVault remains worth having
 underneath it.
 
-Metadata integrity is only partial. An attacker with vault write
-access can alter any metadata column, not only the recipient. The
+Vault write integrity is only partial. An attacker with vault write
+access can alter any metadata column, and can forge a secret's value
+by sealing chosen plaintext to the stored public recipient. The
 recipient swap is caught on the next read, but changes to `env_name`,
-`expires_at`, or version state carry no integrity check in the current
-format. Treat write access to the vault file as a serious compromise.
+`expires_at`, version state, or a value itself carry no integrity check
+in the current format. The address binding section explains how a
+forged value still passes every check. Treat write access to the vault
+file as a serious compromise.
 
 ## Secret names are plaintext
 
 Names, timestamps, version counts, and env variable names are
 readable without the identity in the current format. That keeps
 list, stale, and prefix queries cheap. Treat names as
-non-confidential. This is a recorded open decision and may change
-before 1.0.
+non-confidential. This is a recorded design decision. Changing it
+needs a format bump, so it would arrive only with a major release.
 
 Purge is subject to the same rule. It erases the values but keeps
 the secret row, so the name stays readable in the vault forever. A

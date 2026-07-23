@@ -2,14 +2,15 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	osexec "os/exec"
 	"syscall"
 
-	"github.com/samuel-stidham/safetybox/internal/secret"
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/secret"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"github.com/spf13/cobra"
 )
@@ -39,11 +40,10 @@ func runExec(cobraCmd *cobra.Command, opts *options, args []string) error {
 		return err
 	}
 
-	// G204 guards against untrusted input reaching a subprocess. Here
-	// the "input" is the user's own command line, which is the entire
-	// purpose of the exec verb. No sanitization could keep the verb
-	// useful, so this is a documented false positive.
-	child := osexec.CommandContext(cobraCmd.Context(), args[0], args[1:]...) //nolint:gosec
+	// The input is the user's own command line, which is the entire
+	// purpose of the exec verb, so it is not tainted. The gosec G204
+	// exclusion for this file is recorded in docs/linting.md.
+	child := osexec.CommandContext(cobraCmd.Context(), args[0], args[1:]...)
 
 	child.Stdin = cobraCmd.InOrStdin()
 	child.Stdout = cobraCmd.OutOrStdout()
@@ -80,20 +80,20 @@ func childExitCode(exit *osexec.ExitError) int {
 // envNamedEntries opens the vault, selects every env-named secret, and
 // returns them with the vault's stored recipient for the decrypt path
 // to verify. The vault is closed before the caller decrypts.
-func envNamedEntries(opts *options) ([]vault.Entry, string, error) {
-	openedVault, err := opts.openVault()
+func envNamedEntries(ctx context.Context, opts *options) ([]vault.Entry, string, error) {
+	openedVault, err := opts.openVault(ctx)
 	if err != nil {
 		return nil, "", err
 	}
 
 	defer func() { _ = openedVault.Close() }()
 
-	entries, err := openedVault.Entries(vault.EntryFilter{EnvNamed: true})
+	entries, err := openedVault.Entries(ctx, vault.EntryFilter{EnvNamed: true})
 	if err != nil {
 		return nil, "", userHint(err)
 	}
 
-	recipient, err := openedVault.Recipient()
+	recipient, err := openedVault.Recipient(ctx)
 	if err != nil {
 		return nil, "", fmt.Errorf("read stored recipient: %w", err)
 	}
@@ -105,7 +105,9 @@ func envNamedEntries(opts *options) ([]vault.Entry, string, error) {
 // process environment. Plaintext goes only into the child's
 // environment, which is the exec feature itself.
 func buildSecretEnv(cobraCmd *cobra.Command, opts *options) ([]string, error) {
-	entries, recipient, err := envNamedEntries(opts)
+	ctx := cobraCmd.Context()
+
+	entries, recipient, err := envNamedEntries(ctx, opts)
 	if err != nil {
 		return nil, err
 	}

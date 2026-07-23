@@ -10,10 +10,9 @@ package envelope
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"strings"
 
-	"github.com/samuel-stidham/safetybox/internal/secret"
+	"github.com/samuel-stidham/safetybox/v2/internal/secret"
 
 	"filippo.io/age"
 )
@@ -63,7 +62,10 @@ func Open(identity age.Identity, address string, blob []byte) (secret.Value, err
 		return secret.Value{}, fmt.Errorf("open %s: %w: %w", address, ErrDecryptFailed, err)
 	}
 
-	payload, err := io.ReadAll(reader)
+	// ReadAllWiping zeroes each buffer it outgrows, so the decrypted
+	// plaintext leaves no unzeroed intermediate copies on the heap the
+	// way io.ReadAll's growth would.
+	payload, err := secret.ReadAllWiping(reader)
 	if err != nil {
 		return secret.Value{}, fmt.Errorf("open %s: %w: %w", address, ErrDecryptFailed, err)
 	}

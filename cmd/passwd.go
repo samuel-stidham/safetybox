@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/samuel-stidham/safetybox/internal/identity"
+	"github.com/samuel-stidham/safetybox/v2/internal/identity"
 
 	"github.com/spf13/cobra"
 )
@@ -32,6 +32,16 @@ func runPasswd(cobraCmd *cobra.Command, opts *options, newPassphraseFile string)
 	if err != nil {
 		return err
 	}
+
+	// Serialize against rekey and other passwd runs. An interleaved
+	// passwd can overwrite an identity a rekey just promoted, so both
+	// verbs share one lock for their whole run.
+	unlock, err := acquireIdentityLock(identityPath)
+	if err != nil {
+		return userHint(err)
+	}
+
+	defer unlock()
 
 	// Heal a rekey that crashed mid-swap, like every other verb that
 	// loads the identity. Without this, passwd reports the identity

@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"github.com/spf13/cobra"
 )
@@ -32,14 +32,16 @@ func newListCmd(opts *options) *cobra.Command {
 }
 
 func runList(cobraCmd *cobra.Command, opts *options, prefix string) error {
-	openedVault, err := opts.openVault()
+	ctx := cobraCmd.Context()
+
+	openedVault, err := opts.openVault(ctx)
 	if err != nil {
 		return err
 	}
 
 	defer func() { _ = openedVault.Close() }()
 
-	summaries, err := openedVault.List(prefix)
+	summaries, err := openedVault.List(ctx, prefix)
 	if err != nil {
 		return userHint(err)
 	}
