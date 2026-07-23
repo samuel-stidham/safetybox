@@ -34,6 +34,8 @@ release.
   fails. A batch verb (`exec`, `reveal --env`, `reveal --prefix`) skips
   the one secret with a warning and delivers the rest. This keeps one
   stale secret from denying an entire `exec` run.
+- Bug and security tracking moved to GitHub issues. `docs/roadmap.md`
+  is closed and kept as a record of the earlier review items.
 
 ### Security
 

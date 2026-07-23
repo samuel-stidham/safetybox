@@ -1,5 +1,10 @@
 # Roadmap
 
+This file is closed. From 3.0.0 on, bugs and security findings are
+tracked as [GitHub issues](https://github.com/samuel-stidham/safetybox/issues),
+and this file will not be updated again. The sections below stay as a
+record of the earlier review items and where they landed.
+
 The 2.0.0 security review left a set of items open. They are all done
 now. The low-priority ones shipped across 2.0.x: rekey streams its
 envelopes, every secret reader wipes the buffers it outgrows, the vault
@@ -29,6 +34,8 @@ and deletion are not bound.
 
 ## Open
 
-Nothing is planned. safetybox is feature complete for its single-user
-scope. Future work is security fixes and bug fixes, released as patch
-and minor versions.
+Nothing is tracked here anymore. safetybox is feature complete for its
+single-user scope. Future work is security fixes and bug fixes, filed
+as GitHub issues and released as patch and minor versions. The final
+3.0.0 review rounds left five open issues, #10 through #14, which are
+the release freeze gate.
