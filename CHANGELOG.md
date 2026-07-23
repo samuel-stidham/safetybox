@@ -4,6 +4,28 @@ All notable changes to safetybox are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [2.0.1] - 2026-07-23
+
+### Added
+
+- A pseudo-terminal test for the no-echo prompt, closing the last
+  low-priority roadmap item. It asserts echo is off while the prompt
+  reads, the returned line is exact, and the terminal state is
+  restored. It adds `github.com/creack/pty` as a test-only dependency,
+  which never reaches the shipped binary.
+
+### Security
+
+- The shared wiping reader now also zeroes the unused capacity of the
+  slice it returns on a successful read. A reader may leave scratch
+  bytes past the count it reports, and for secret input that scratch
+  could be plaintext. The readers in use never do this, so the change
+  is defense in depth, matching the wipe the error path already does.
+- The wiping reader guards its buffer growth against integer overflow.
+  A pathologically large input now fails with a clear error instead of
+  a panic in `make`. No input a real machine can hold reaches this
+  bound, so this matters only to a hypothetical 32-bit build.
+
 ## [2.0.0] - 2026-07-22
 
 A security-review release. Several adversarial two-reviewer passes

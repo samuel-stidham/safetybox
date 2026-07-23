@@ -35,6 +35,11 @@ for the local loop, and `make test-race` adds it. `make test-race`
 forces `CGO_ENABLED=1`, because the detector needs cgo, even though the
 shipped binary is built with cgo disabled. CI runs `make test-race`.
 
+The no-echo passphrase prompt is tested against a real pseudo-terminal,
+so echo suppression and terminal restore are verified rather than
+assumed. That test uses the `creack/pty` helper and runs on Linux and
+macOS.
+
 Two conventions are non-negotiable. Every envelope test includes a
 corrupt-one-byte case asserting decryption fails. Test fixtures use
 obviously fake material like `fake-test-passphrase-not-real`, never
@@ -55,9 +60,11 @@ safetybox, then third-party, enforced by gci with custom order.
 This is a secrets tool, so every module in go.sum is audit surface.
 The dependency list is deliberately short: age, modernc sqlite,
 cobra, memguard, testify, and the x/crypto, x/term, and x/sys
-families. x/sys backs the no-echo prompt's terminal control. Justify
-any addition in the PR description. A `vendor/` directory may exist
-locally for offline builds. It stays untracked, and CI resolves
+families. x/sys backs the no-echo prompt's terminal control. One
+test-only dependency, `creack/pty`, allocates a pseudo-terminal for
+the prompt's terminal test and never reaches the shipped binary.
+Justify any addition in the PR description. A `vendor/` directory may
+exist locally for offline builds. It stays untracked, and CI resolves
 modules from `go.sum`.
 
 ## Commits and CI
