@@ -255,7 +255,8 @@ Changes the identity passphrase. It decrypts the identity with the
 current passphrase and re-encrypts it with the new one, swapped into
 place atomically. The key itself does not change, so the vault needs
 nothing. The current passphrase comes from the prompt or the global
-`--passphrase-file`.
+`--passphrase-file`. passwd shares the identity lock with rekey, so
+it never interleaves with a rotation.
 
 ## rekey
 
@@ -266,7 +267,10 @@ safetybox rekey
 Full key rotation. rekey generates a new identity, re-encrypts every
 non-destroyed version to it, and stores the new recipient. All vault
 writes happen inside one transaction and the recipient updates last,
-so a failure at any point leaves the old vault fully intact.
+so a failure before the commit leaves the old vault fully intact.
+The commit itself can error while its record is already durable. In
+that one case rekey keeps both key files, and the error says to test
+which key opens the vault before deleting either.
 
 The new identity is staged beside the old one before the vault
 transaction starts. After the transaction commits, the old identity
@@ -274,6 +278,12 @@ moves to a `.bak` sibling and the new one takes its place. Keep the
 `.bak` until you have verified a reveal, then back up the new file
 and delete the old one. The passphrase stays the same. Use passwd to
 change it.
+
+rekey and passwd hold an exclusive lock on an `identity.age.lock`
+sibling for their whole run, so two rotations can never interleave
+and delete each other's staged key. A second run refuses up front
+while one is active. The empty lock file is a permanent, harmless
+sibling of the identity.
 
 Before touching anything, rekey verifies the vault is really
 encrypted to the loaded identity. If a previous rekey crashed after
@@ -295,6 +305,6 @@ safetybox --version
 Prints the running version. Builds made through the Makefile or a
 release stamp it at build time. A plain `go install` gets no stamp,
 so the binary falls back to the module version recorded in the build
-info. Every path reports the same v-prefixed form, v1.2.0. Running
-`safetybox` with no arguments also shows the version under the
-banner.
+info. Every path reports the same v-prefixed form, such as v2.0.0.
+Running `safetybox` with no arguments also shows the version under
+the banner.

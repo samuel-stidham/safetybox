@@ -5,9 +5,14 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -235,4 +240,95 @@ func TestRekeyRunsAfterLockIsReleased(t *testing.T) {
 	unlock()
 
 	fixture.runOK("", "rekey")
+}
+
+// TestFailedRekeyKeepsStagedKeyOnAmbiguousCommit covers R-7: when the
+// rekey commit itself errors, the commit may still have landed in the
+// WAL, so the staged key must survive and the error must tell the user
+// to test which key opens the vault.
+func TestFailedRekeyKeepsStagedKeyOnAmbiguousCommit(t *testing.T) {
+	tmp := t.TempDir()
+	stagedPath := filepath.Join(tmp, "identity.age.new")
+
+	require.NoError(t, os.WriteFile(stagedPath, []byte("fake-staged-key-not-real"), 0o600))
+
+	failure := fmt.Errorf("commit rekey: %w", vault.ErrCommitAmbiguous)
+
+	err := cleanUpFailedRekey(failure, filepath.Join(tmp, "identity.age"), stagedPath)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "test which key opens the vault")
+	assert.FileExists(t, stagedPath, "an ambiguous commit must not delete the staged key")
+}
+
+// TestFailedRekeyRemovesStagedKeyOnPreCommitError pins the other half:
+// a failure before the commit leaves the vault unchanged, so the
+// staged key is removed to keep a retry clean.
+func TestFailedRekeyRemovesStagedKeyOnPreCommitError(t *testing.T) {
+	tmp := t.TempDir()
+	stagedPath := filepath.Join(tmp, "identity.age.new")
+
+	require.NoError(t, os.WriteFile(stagedPath, []byte("fake-staged-key-not-real"), 0o600))
+
+	err := cleanUpFailedRekey(errors.New("reseal failed"), filepath.Join(tmp, "identity.age"), stagedPath)
+
+	require.Error(t, err)
+	assert.NoFileExists(t, stagedPath, "a pre-commit failure must remove the staged key")
+}
+
+// pipeWithInput returns the read end of a pipe holding input. Closing
+// the write end models the terminal reaching end of input.
+func pipeWithInput(t *testing.T, input string) *os.File {
+	t.Helper()
+
+	readEnd, writeEnd, err := os.Pipe()
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = readEnd.Close() })
+
+	_, err = writeEnd.WriteString(input)
+	require.NoError(t, err)
+	require.NoError(t, writeEnd.Close())
+
+	return readEnd
+}
+
+// TestReadLineWipingStopsAtNewline pins that the prompt line reader
+// returns exactly the typed line, without its newline, and never
+// consumes input past it.
+func TestReadLineWipingStopsAtNewline(t *testing.T) {
+	readEnd := pipeWithInput(t, "fake-typed-passphrase-not-real\nnext")
+
+	line, err := readLineWiping(int(readEnd.Fd()))
+
+	require.NoError(t, err)
+	assert.Equal(t, []byte("fake-typed-passphrase-not-real"), line)
+
+	rest, err := io.ReadAll(readEnd)
+	require.NoError(t, err)
+	assert.Equal(t, "next", string(rest), "input after the newline must stay unread")
+}
+
+// TestReadLineWipingReturnsDataAtEndOfInput pins that input ending
+// without a newline still yields the line, matching term.ReadPassword.
+func TestReadLineWipingReturnsDataAtEndOfInput(t *testing.T) {
+	readEnd := pipeWithInput(t, "fake-typed-passphrase-not-real")
+
+	line, err := readLineWiping(int(readEnd.Fd()))
+
+	require.NoError(t, err)
+	assert.Equal(t, []byte("fake-typed-passphrase-not-real"), line)
+}
+
+// TestReadLineWipingSurvivesGrowth pins content fidelity for a line
+// longer than the reader's initial buffer, so the wiping of outgrown
+// buffers never corrupts a long passphrase.
+func TestReadLineWipingSurvivesGrowth(t *testing.T) {
+	long := strings.Repeat("x", 700)
+	readEnd := pipeWithInput(t, long+"\n")
+
+	line, err := readLineWiping(int(readEnd.Fd()))
+
+	require.NoError(t, err)
+	assert.Equal(t, []byte(long), line)
 }

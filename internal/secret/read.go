@@ -1,7 +1,6 @@
 package secret
 
 import (
-	"errors"
 	"fmt"
 	"io"
 )
@@ -18,10 +17,9 @@ const readChunk = 512
 // a half-read secret never survives the failure. The caller owns the
 // returned slice and should zero it after use.
 //
-// End of input is detected with errors.Is, so a reader that WRAPS
-// io.EOF inside a genuine failure reads as a clean end of input. That
-// is wider than io.ReadAll's bare comparison. Every current caller
-// passes a file, a pipe, or a decrypt stream that returns io.EOF bare.
+// End of input is exactly a bare io.EOF, matching io.ReadAll. An error
+// that merely wraps io.EOF is a genuine failure, and treating it as a
+// clean end would silently hand back truncated secret data.
 func ReadAllWiping(r io.Reader) ([]byte, error) {
 	buf := make([]byte, 0, readChunk)
 
@@ -37,7 +35,7 @@ func ReadAllWiping(r io.Reader) ([]byte, error) {
 		buf = buf[:len(buf)+n]
 
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			if err == io.EOF {
 				return buf, nil
 			}
 

@@ -106,7 +106,7 @@ func promptOnce(cobraCmd *cobra.Command, label, noun string) ([]byte, error) {
 
 	printStderr(cobraCmd, label)
 
-	entered, err := term.ReadPassword(stdinFd)
+	entered, err := readLineNoEcho(stdinFd)
 
 	printStderr(cobraCmd, "\n")
 

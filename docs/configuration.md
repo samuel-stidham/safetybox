@@ -12,6 +12,12 @@ The identity is an age-encrypted file at
 `$XDG_CONFIG_HOME/safetybox/identity.age`, which resolves to
 `~/.config/safetybox/identity.age`.
 
+The identity file gains siblings over time. rekey keeps the previous
+key at `identity.age.bak` and stages the next key at
+`identity.age.new` mid-rotation. rekey and passwd share a permanent,
+empty `identity.age.lock` file that serializes them. Include the
+`.bak` in backups and leave the others alone.
+
 Resolution is flag first, then environment, then the XDG default.
 
 ```sh
@@ -29,7 +35,7 @@ every verb.
 
 `--passphrase-file` reads the identity passphrase from a file instead
 of prompting. Use it for scripts and automation. The file should be
-0600 and outside version control. One trailing newline is trimmed.
+0600 and outside version control. Trailing newlines are trimmed.
 
 `--json` switches output from pretty JSON to compact single-line
 JSON for pipes.

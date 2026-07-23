@@ -316,6 +316,23 @@ func TestReadAllWipingHandlesDataWithEOF(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
+// TestReadAllWipingTreatsWrappedEOFAsFailure pins io.ReadAll's exact
+// end-of-input contract: only a bare io.EOF is success. An error that
+// wraps io.EOF is a genuine failure, and reading it as a clean end
+// would silently return truncated secret data.
+func TestReadAllWipingTreatsWrappedEOFAsFailure(t *testing.T) {
+	torn := io.MultiReader(
+		bytes.NewReader(bytes.Repeat([]byte("x"), 100)),
+		iotest.ErrReader(fmt.Errorf("stream torn down: %w", io.EOF)),
+	)
+
+	got, err := secret.ReadAllWiping(torn)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, io.EOF, "the wrapped cause must stay inspectable")
+	assert.Nil(t, got, "a wrapped EOF must not return truncated content as success")
+}
+
 // windowCapturingReader keeps the first buffer window it is handed, so
 // a test can inspect the outgrown backing array after the read ends.
 type windowCapturingReader struct {

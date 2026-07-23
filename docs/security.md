@@ -71,9 +71,12 @@ lock you out of your own data after a backup reset the mode.
 
 The decrypted identity is held in a memguard locked buffer for the
 duration of one invocation and wiped afterward. Passphrase buffers
-are zeroed after use. Go strings copied during parsing are outside
-that control, so this is hardening, not a guarantee against a
-debugger on your own machine.
+are zeroed after use. Every reader that touches secret material wipes
+each buffer it outgrows. That covers the no-echo prompt, the stdin
+and file readers, the identity loader, and the envelope decrypt path.
+A failed read wipes its partial buffer and returns nothing. Go
+strings copied during parsing are outside that control, so this is
+hardening, not a guarantee against a debugger on your own machine.
 
 ## Rotation and destruction
 
@@ -87,6 +90,12 @@ rekey verifies the vault is really encrypted to the loaded identity,
 so a rerun after an interrupted rotation can never discard the live
 staged key. Read verbs heal an interrupted swap on the next
 invocation.
+
+rekey and passwd hold an exclusive lock beside the identity for
+their whole run, so two rotations can never interleave and delete
+each other's staged key. A commit that errors after its record became
+durable is treated as ambiguous. rekey then keeps both key files and
+says to test which one opens the vault before deleting either.
 
 purge erases envelopes but keeps rows, so history shows a version
 existed without any way to recover its value. The vault runs with
@@ -116,8 +125,8 @@ format. Treat write access to the vault file as a serious compromise.
 Names, timestamps, version counts, and env variable names are
 readable without the identity in the current format. That keeps
 list, stale, and prefix queries cheap. Treat names as
-non-confidential. This is a recorded open decision and may change
-before 1.0.
+non-confidential. This is a recorded design decision. Changing it
+needs a format bump, so it would arrive only with a major release.
 
 Purge is subject to the same rule. It erases the values but keeps
 the secret row, so the name stays readable in the vault forever. A

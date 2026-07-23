@@ -54,9 +54,11 @@ safetybox, then third-party, enforced by gci with custom order.
 
 This is a secrets tool, so every module in go.sum is audit surface.
 The dependency list is deliberately short: age, modernc sqlite,
-cobra, memguard, testify, and the x/crypto and x/term families.
-Justify any addition in the PR description. Dependencies are
-vendored.
+cobra, memguard, testify, and the x/crypto, x/term, and x/sys
+families. x/sys backs the no-echo prompt's terminal control. Justify
+any addition in the PR description. A `vendor/` directory may exist
+locally for offline builds. It stays untracked, and CI resolves
+modules from `go.sum`.
 
 ## Commits and CI
 

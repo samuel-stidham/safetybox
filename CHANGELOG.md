@@ -35,6 +35,22 @@ release.
 - A roadmap under `docs/roadmap.md` that tracks the security items the
   review left open for a later release.
 
+### Changed
+
+- `make test` now runs the fast suite for the local loop, and
+  `make test-race` runs the same tests under the race detector with
+  cgo on. CI runs `make test-race`.
+- Lint suppressions moved out of the code. The two gosec G204
+  exceptions live in `.golangci.yml` as anchored per-file rules, each
+  justified in `docs/linting.md`, and no inline `nolint` comments
+  remain.
+- The documentation matches the shipped behavior. The security model,
+  command reference, tutorial, and configuration guide describe the
+  identity lock, the ambiguous-commit handling, and the wiping
+  readers. The configuration guide documents the identity file's
+  `.bak`, `.new`, and `.lock` siblings. The README and the security
+  model drop their 1.0-era status text.
+
 ### Security
 
 - Read verbs verify the vault recipient against the loaded identity. A
@@ -54,14 +70,23 @@ release.
 - A signal now wipes the identity enclave. `main` installs a memguard
   interrupt handler and routes fatal exits through `SafeExit`, so a
   Ctrl-C during a decrypt scrubs the key before the process exits.
-- The value and passphrase readers and the envelope decrypt path wipe
-  each buffer they outgrow, and a failed read wipes its partial buffer
-  and returns nothing. The interactive prompt still reads through
-  `x/term`, which grows without wiping. That gap is on the roadmap.
+- Every reader that touches secret material wipes each buffer it
+  outgrows: the value and passphrase readers, the envelope decrypt
+  path, the identity loader, and the interactive prompt, which now
+  uses its own no-echo reader instead of `term.ReadPassword`, whose
+  line buffer grows without wiping. A failed read wipes its partial
+  buffer and returns nothing. Only a bare `io.EOF` counts as end of
+  input, so a wrapped EOF can never pass truncated data off as a
+  successful read.
 - rekey and passwd now hold an exclusive lock beside the identity file
   for their whole run. Two interleaved rekeys could delete each other's
   staged key and leave the vault sealed to a key that no longer exists
   anywhere. The second run now refuses up front instead.
+- A rekey whose commit errors keeps its staged identity. SQLite can
+  report a commit error after the commit became durable in the WAL,
+  and deleting the staged key then would destroy the only key able to
+  read the re-encrypted vault. The error now says to test which key
+  opens the vault before deleting either.
 
 ### Fixed
 
@@ -87,7 +112,9 @@ release.
   not only read.
 - The module installs at v2. The path now carries the `/v2` suffix that
   Go's semantic import versioning requires. So `go install` and the
-  module proxy accept the v2.0.0 tag.
+  module proxy accept the v2.0.0 tag. The Makefile `PKG` variable, the
+  gci import prefix, and the install commands in the README and the
+  tutorial carry the suffix too.
 - rekey re-encrypts one version at a time instead of holding every
   envelope in memory at once. This bounds its memory use on a large
   vault.

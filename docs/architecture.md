@@ -9,7 +9,7 @@ guarantees checkable by the compiler instead of by review.
 ```text
 main.go              thin, calls cmd.Execute()
 cmd/                 one file per verb, flags, JSON output, user-facing errors
-internal/secret/     secret.Value, the only type holding plaintext bytes
+internal/secret/     secret.Value and the wiping reader for plaintext bytes
 internal/envelope/   age seal and open, address binding
 internal/identity/   identity file load, write, and atomic replace
 internal/vault/      SQLite store, schema, versions, metadata
@@ -19,7 +19,7 @@ internal/logging/    slog setup on stderr
 Secrets flow `secret → envelope → vault` and never backward. The
 vault stores sealed bytes it cannot read. The envelope package seals
 and opens but never persists. The secret package holds plaintext and
-nothing else.
+the wiping reader that carries it, nothing else.
 
 Where the vault needs an envelope created, it takes a callback. set
 hands `AppendVersion` a sealer that closes over the recipient, and

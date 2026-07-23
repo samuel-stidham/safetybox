@@ -117,9 +117,7 @@ func rotateToNewKey(
 
 	count, err := rekeyVault(cobraCmd, opts, oldKey, newKey)
 	if err != nil {
-		_ = os.Remove(stagedPath)
-
-		return nil, err
+		return nil, cleanUpFailedRekey(err, identityPath, stagedPath)
 	}
 
 	if err := swapIdentityFiles(identityPath, stagedPath); err != nil {
@@ -131,6 +129,26 @@ func rotateToNewKey(
 		RekeyedVersions: count,
 		BackupIdentity:  identityPath + ".bak",
 	}, nil
+}
+
+// cleanUpFailedRekey decides what a failed rekey leaves on disk. A
+// pre-commit failure leaves the vault unchanged, so the staged key is
+// removed to keep a retry clean. A commit that errored may still have
+// landed durably in the WAL. In that case the staged key may be the
+// only key able to read the vault, so it survives and the error tells
+// the user to test which key opens the vault before deleting either.
+func cleanUpFailedRekey(err error, identityPath, stagedPath string) error {
+	if errors.Is(err, vault.ErrCommitAmbiguous) {
+		return fmt.Errorf(
+			"%w: the vault may or may not be rekeyed: keep both %s and %s, "+
+				"and test which key opens the vault before deleting either",
+			err, identityPath, stagedPath,
+		)
+	}
+
+	_ = os.Remove(stagedPath)
+
+	return err
 }
 
 // ensureVaultOnIdentity verifies the vault's stored recipient matches

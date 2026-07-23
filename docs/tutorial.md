@@ -323,7 +323,9 @@ safetybox rekey
 ```
 
 Every vault write happens in one transaction and the recipient updates
-last, so a failure at any point leaves the old vault fully intact. The
+last, so a failure before the commit leaves the old vault fully
+intact. In the rare case where the commit itself errors, rekey keeps
+both key files and tells you to test which one opens the vault. The
 old identity moves to a `.bak` sibling and the new one takes its place.
 Keep the `.bak` until you have verified a `reveal`, then back up the new
 file and delete the old one. The passphrase stays the same. Use `passwd`

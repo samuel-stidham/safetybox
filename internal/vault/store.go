@@ -701,7 +701,9 @@ type liveVersion struct {
 
 // Rekey re-encrypts every non-destroyed version through reseal and
 // stores the new recipient, all inside ONE transaction. The recipient
-// update happens last. Any failure rolls the whole vault back.
+// update happens last. Any failure before the commit rolls the whole
+// vault back. The commit itself can error after its record became
+// durable, and that ambiguity is marked with [ErrCommitAmbiguous].
 func (v *Vault) Rekey(ctx context.Context, newRecipient string, reseal Resealer) (int64, error) {
 	txn, err := v.handle.BeginTx(ctx, nil)
 	if err != nil {
@@ -741,7 +743,11 @@ func (v *Vault) Rekey(ctx context.Context, newRecipient string, reseal Resealer)
 	}
 
 	if err := txn.Commit(); err != nil {
-		return 0, fmt.Errorf("commit rekey: %w", err)
+		// The commit record can be durable in the WAL even when the
+		// commit call reports an error, a failed fsync being the
+		// canonical case. Mark the ambiguity so the rekey verb knows
+		// not to delete the staged key the vault may now depend on.
+		return 0, fmt.Errorf("commit rekey: %w: %w", ErrCommitAmbiguous, err)
 	}
 
 	// Flush the WAL so envelopes sealed to the old recipient do not
