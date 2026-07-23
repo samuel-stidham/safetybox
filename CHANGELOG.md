@@ -21,10 +21,7 @@ release.
   the format. It needs the passphrase, because re-sealing decrypts each
   value, and it accepts `--passphrase-file`, including a process
   substitution like `(secret-get name | psub)`. The identity and the
-  recipient do not change. It holds an exclusive lock on a
-  `vault.db.lock` sibling for its run, so a second migrate on the same
-  vault refuses up front instead of blocking on the database write lock,
-  the same serialization rekey and passwd use for the identity.
+  recipient do not change.
 
 ### Changed
 
@@ -48,6 +45,22 @@ release.
   which is the documented limit of keyless writes. Version state and
   deletion are not bound, because the operations that change them hold
   no plaintext to re-seal.
+- Every explicit read refuses a valid-but-empty `env_name` column, a
+  tamper state the store never writes. `reveal <name>` previously
+  printed the value under that one state while `get` refused it. The
+  check now runs on `get` and `reveal <name>` alike, so the plaintext
+  verb no longer fails open on a metadata edit.
+
+### Fixed
+
+- migrate serializes against another migrate on the same vault through
+  an exclusive `vault.db.lock`. A second run refuses up front instead of
+  blocking on the database write lock. On a large vault that block would
+  time out with a raw busy error. This mirrors the identity lock rekey
+  and passwd use.
+- The metadata tamper error names the specific mismatch, the env name or
+  the expiry, instead of repeating the summary phrase. That makes an
+  explicit-read failure easier to scan.
 
 ### Upgrading
 
