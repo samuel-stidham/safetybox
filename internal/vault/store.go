@@ -717,11 +717,20 @@ func (v *Vault) Rekey(ctx context.Context, newRecipient string, reseal Resealer)
 		return 0, err
 	}
 
+	// Prepare the per-row fetch once. Issuing the raw SQL inside the
+	// loop would re-parse and re-plan it for every version, which on a
+	// large vault is pure overhead on top of the reseal's crypto work.
+	fetch, err := txn.PrepareContext(ctx, "SELECT envelope FROM secret_version WHERE id = ?")
+	if err != nil {
+		return 0, fmt.Errorf("prepare envelope fetch: %w", err)
+	}
+
+	defer func() { _ = fetch.Close() }()
+
 	for _, version := range live {
 		var envelope []byte
 
-		err := txn.QueryRowContext(ctx,
-			"SELECT envelope FROM secret_version WHERE id = ?", version.id).Scan(&envelope)
+		err := fetch.QueryRowContext(ctx, version.id).Scan(&envelope)
 		if err != nil {
 			return 0, fmt.Errorf("read %s version %d: %w", version.name, version.number, err)
 		}

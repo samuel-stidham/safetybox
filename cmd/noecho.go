@@ -3,6 +3,8 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"os"
+	"os/signal"
 
 	"golang.org/x/sys/unix"
 )
@@ -32,9 +34,46 @@ func readLineNoEcho(stdinFd int) ([]byte, error) {
 		return nil, fmt.Errorf("disable terminal echo: %w", err)
 	}
 
-	defer func() { _ = unix.IoctlSetTermios(stdinFd, ioctlWriteTermios, previous) }()
+	restore := func() { _ = unix.IoctlSetTermios(stdinFd, ioctlWriteTermios, previous) }
+
+	defer restore()
+
+	// Echo is off now. A Ctrl-C at the prompt raises SIGINT, and the
+	// memguard interrupt handler in main wipes the enclave and exits
+	// the process without unwinding the defer above, which would leave
+	// the shell with echo disabled. Restore the terminal from a signal
+	// handler too, so an interrupted prompt does not leave a broken
+	// shell. Both restores run the same idempotent ioctl. This is best
+	// effort: it races the memguard handler's exit, and it usually wins
+	// because the restore is one syscall.
+	stopSignalRestore := onSignalRestore(restore)
+	defer stopSignalRestore()
 
 	return readLineWiping(stdinFd)
+}
+
+// onSignalRestore runs restore when the process receives an interrupt
+// or terminate signal, and returns a function that tears the handler
+// down. The default signal disposition still applies, so this only adds
+// the terminal restore, it does not swallow the signal.
+func onSignalRestore(restore func()) func() {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, unix.SIGTERM)
+
+	done := make(chan struct{})
+
+	go func() {
+		select {
+		case <-signals:
+			restore()
+		case <-done:
+		}
+	}()
+
+	return func() {
+		signal.Stop(signals)
+		close(done)
+	}
 }
 
 // readLineWiping reads until a newline or end of input, zeroing each

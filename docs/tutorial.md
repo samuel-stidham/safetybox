@@ -346,7 +346,7 @@ write new secrets and read metadata, but every read of a value fails.
 
 Two safety notes come up here. safetybox warns on stderr if the vault
 file, its directory, or its write-ahead siblings become group- or
-world-readable, which a careless copy can cause. And if the vault's
+world-accessible, which a careless copy can cause. And if the vault's
 stored recipient does not match your identity, every read refuses with a
 clear error rather than a confusing decryption failure. That guards
 against a tampered vault and against pointing the wrong identity at it.

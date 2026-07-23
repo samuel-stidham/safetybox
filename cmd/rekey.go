@@ -49,7 +49,7 @@ func runRekey(cobraCmd *cobra.Command, opts *options) error {
 	// longer exists anywhere on disk.
 	unlock, err := acquireIdentityLock(identityPath)
 	if err != nil {
-		return err
+		return userHint(err)
 	}
 
 	defer unlock()
@@ -264,7 +264,7 @@ func swapIdentityFiles(identityPath, stagedPath string) error {
 		return fmt.Errorf("vault rekeyed but identity swap failed, your NEW identity is at %s: %w", stagedPath, err)
 	}
 
-	if err := os.Rename(stagedPath, identityPath); err != nil {
+	if err := promoteStagedIdentity(stagedPath, identityPath); err != nil {
 		return fmt.Errorf("vault rekeyed but identity swap failed, your NEW identity is at %s: %w", stagedPath, err)
 	}
 
@@ -277,4 +277,28 @@ func swapIdentityFiles(identityPath, stagedPath string) error {
 	}
 
 	return nil
+}
+
+// promoteStagedIdentity renames the staged key into place. Read verbs
+// heal a missing identity by promoting the staged key without taking
+// the identity lock, so one can win this rename between the swap's two
+// steps. When that happens the staged file is gone and the identity is
+// already in place, so a missing staged file with the identity present
+// is the heal having finished the swap, not a failure.
+func promoteStagedIdentity(stagedPath, identityPath string) error {
+	err := os.Rename(stagedPath, identityPath)
+	if err == nil {
+		return nil
+	}
+
+	// ENOENT with the identity already in place means a concurrent
+	// reader heal promoted the staged key between the swap's two
+	// renames. That completed the swap, so it is not a failure.
+	if errors.Is(err, fs.ErrNotExist) {
+		if _, statErr := os.Stat(identityPath); statErr == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("promote staged identity: %w", err)
 }

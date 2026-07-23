@@ -39,7 +39,11 @@ func ReadAllWiping(r io.Reader) ([]byte, error) {
 				return buf, nil
 			}
 
-			wipe(buf)
+			// Wipe the whole capacity, not just the content length. A
+			// reader is allowed to scribble scratch into the rest of the
+			// slice it was handed, past the n bytes it reports, and that
+			// scratch could be secret material too.
+			wipe(buf[:cap(buf)])
 
 			return nil, fmt.Errorf("read: %w", err)
 		}

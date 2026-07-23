@@ -74,5 +74,8 @@ inspected for conventional commits. A feat commit bumps the minor
 version, a fix commit bumps the patch, and a breaking change bumps
 the major. The new tag triggers GoReleaser in the same workflow run,
 which builds static binaries for Linux and macOS on amd64 and arm64,
-generates checksums and a changelog, and publishes the GitHub
-release. A manually pushed `v*` tag releases the same way.
+generates checksums, and publishes the GitHub release. The release
+notes come from the `CHANGELOG.md` section for the tag, which CI
+extracts and passes to GoReleaser, so the generated commit-list
+changelog is disabled. A manually pushed `v*` tag releases the same
+way.

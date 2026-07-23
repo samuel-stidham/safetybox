@@ -38,7 +38,7 @@ func runPasswd(cobraCmd *cobra.Command, opts *options, newPassphraseFile string)
 	// verbs share one lock for their whole run.
 	unlock, err := acquireIdentityLock(identityPath)
 	if err != nil {
-		return err
+		return userHint(err)
 	}
 
 	defer unlock()

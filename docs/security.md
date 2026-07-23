@@ -50,6 +50,17 @@ read, even for old versions that still decrypt. The write path holds no
 identity by design, so it cannot prevent the bad write. Detection on
 read is the guard, not prevention at write time.
 
+The address binding stops an attacker moving an existing envelope
+between rows. It does not authenticate the value's origin. The
+recipient is a public key, so an attacker with vault write access can
+seal a chosen plaintext to it with the correct embedded address and
+overwrite a row. That forged value decrypts cleanly and passes both the
+address check and the recipient check, because the vault still holds
+your recipient. Authenticating the value itself would need a signing
+secret at write time, which the asymmetric write model deliberately
+lacks so a producer machine never holds one. Treat vault write access
+as a serious compromise, and see the roadmap for the deferred fix.
+
 ## Files and permissions
 
 The vault file is created 0600 with WAL journaling, and SQLite gives
@@ -114,11 +125,14 @@ process memory. safetybox is a careful single-user store, not an
 HSM. At-rest disk protection like FileVault remains worth having
 underneath it.
 
-Metadata integrity is only partial. An attacker with vault write
-access can alter any metadata column, not only the recipient. The
+Vault write integrity is only partial. An attacker with vault write
+access can alter any metadata column, and can forge a secret's value
+by sealing chosen plaintext to the stored public recipient. The
 recipient swap is caught on the next read, but changes to `env_name`,
-`expires_at`, or version state carry no integrity check in the current
-format. Treat write access to the vault file as a serious compromise.
+`expires_at`, version state, or a value itself carry no integrity check
+in the current format. The address binding section explains how a
+forged value still passes every check. Treat write access to the vault
+file as a serious compromise.
 
 ## Secret names are plaintext
 

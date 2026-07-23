@@ -10,12 +10,13 @@ passwd, and rekey. Verbs that only write or read metadata never ask
 for it: set, show, list, stale, disable, delete, and purge. That
 asymmetry is the point of storing the public recipient in the vault.
 
-Two guards apply across every verb. safetybox warns on stderr when the
-vault file, its directory, or its write-ahead siblings grant group or
-world access, since names and timestamps are plaintext columns. And
-every decrypting verb refuses when the vault's stored recipient does
-not match your identity, which flags a tampered vault or the wrong
-identity before it prints a confusing decryption error.
+Two guards apply. safetybox warns on stderr when the vault file, its
+directory, or its write-ahead siblings grant group or world access,
+since names and timestamps are plaintext columns. And every verb that
+reads the vault, get, reveal, exec, and rekey, refuses when the stored
+recipient does not match your identity, which flags a tampered vault or
+the wrong identity before a confusing decryption error. passwd touches
+only the identity file, so it makes no such check.
 
 ## init
 

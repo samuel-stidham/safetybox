@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/samuel-stidham/safetybox/v2/internal/envelope"
 	"github.com/samuel-stidham/safetybox/v2/internal/identity"
@@ -16,6 +15,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
+	"golang.org/x/sys/unix"
 )
 
 // lockFileMode matches the identity file's private mode.
@@ -31,28 +31,62 @@ const lockFileMode = 0o600
 // on purpose: removing it would let a third process lock a fresh inode
 // while the second still holds the old one.
 func acquireIdentityLock(identityPath string) (func(), error) {
-	lockPath := filepath.Clean(identityPath + ".lock")
+	lockPath := filepath.Clean(identityLockPath(identityPath))
 
 	file, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, lockFileMode)
 	if err != nil {
+		// A missing parent directory means no identity was created here
+		// yet. Surface the same not-found hint the identity load gives,
+		// rather than a raw error about the lock file. The lock is taken
+		// before the load, so without this a first-run passwd or rekey
+		// would report the lock path instead of pointing at init.
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%s: %w", identityPath, identity.ErrNotFound)
+		}
+
 		return nil, fmt.Errorf("open identity lock %s: %w", lockPath, err)
 	}
 
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = file.Close()
 
-		return nil, fmt.Errorf(
-			"another safetybox rekey or passwd is running against %s: retry when it finishes: %w",
-			identityPath, err,
-		)
+		// EWOULDBLOCK is the one expected failure: another process
+		// holds the lock. Anything else is an environment problem,
+		// such as a filesystem without flock support, and must not
+		// masquerade as a concurrent run.
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, fmt.Errorf(
+				"another safetybox rekey or passwd is running against %s: retry when it finishes: %w",
+				identityPath, err,
+			)
+		}
+
+		return nil, fmt.Errorf("lock identity %s: %w", lockPath, err)
 	}
 
 	release := func() {
-		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = unix.Flock(int(file.Fd()), unix.LOCK_UN)
 		_ = file.Close()
 	}
 
 	return release, nil
+}
+
+// identityLockPath derives the lock file path from the identity path.
+// It resolves symlinks so that two spellings of one identity, such as a
+// symlink alias, lock the same file and serialize against each other.
+// EvalSymlinks needs the file to exist, so before init it falls back to
+// an absolute path, and finally to a cleaned path.
+func identityLockPath(identityPath string) string {
+	if resolved, err := filepath.EvalSymlinks(identityPath); err == nil {
+		return resolved + ".lock"
+	}
+
+	if absolute, err := filepath.Abs(identityPath); err == nil {
+		return absolute + ".lock"
+	}
+
+	return filepath.Clean(identityPath + ".lock")
 }
 
 // warnLooseVaultPerms warns once per invocation when the vault file,

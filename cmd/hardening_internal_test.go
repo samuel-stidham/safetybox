@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/samuel-stidham/safetybox/v2/internal/identity"
 	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"filippo.io/age"
@@ -175,6 +176,29 @@ func TestSetClearsExpiry(t *testing.T) {
 	assert.Nil(t, decode(t, stdout)["expiresAt"], "empty --expires must clear the expiry")
 }
 
+// TestSetClearsEnvName covers B-08: an explicit empty --env-name removes
+// the env name, so exec stops injecting the variable. This is a
+// different code path from the expiry clearing, guarded separately.
+func TestSetClearsEnvName(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fixture.runOK(fakeValueOne+"\n", "set", "env/clear", "--env-name", "FAKE_CLEARABLE")
+
+	stdout, _ := fixture.runOK("", "show", "env/clear")
+	require.Equal(t, "FAKE_CLEARABLE", decode(t, stdout)["envName"], "env name must be set first")
+
+	injected, _ := fixture.runOK("", "exec", "--", "sh", "-c", `printf '%s' "$FAKE_CLEARABLE"`)
+	require.Equal(t, fakeValueOne, injected, "exec must inject the env-named secret")
+
+	fixture.runOK(fakeValueTwo+"\n", "set", "env/clear", "--env-name", "")
+
+	stdout, _ = fixture.runOK("", "show", "env/clear")
+	assert.Nil(t, decode(t, stdout)["envName"], "empty --env-name must clear the env name")
+
+	after, _ := fixture.runOK("", "exec", "--", "sh", "-c", `printf '%s' "$FAKE_CLEARABLE"`)
+	assert.Empty(t, after, "a cleared env name must not inject")
+}
+
 // TestRevealJSONBase64EncodesNonUTF8 covers A-5: a value that is not
 // valid UTF-8 is base64-encoded and marked, so a consumer gets the
 // exact bytes back instead of U+FFFD substitutions.
@@ -274,6 +298,72 @@ func TestFailedRekeyRemovesStagedKeyOnPreCommitError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.NoFileExists(t, stagedPath, "a pre-commit failure must remove the staged key")
+}
+
+// TestPromoteStagedIdentityToleratesCompletedHeal covers A-4 and B-06:
+// a read verb's heal can promote the staged key between the swap's two
+// renames. A missing staged file with the identity already in place is
+// that heal having finished the swap, not a failure.
+func TestPromoteStagedIdentityToleratesCompletedHeal(t *testing.T) {
+	t.Run("renames the staged key into place", func(t *testing.T) {
+		tmp := t.TempDir()
+		staged := filepath.Join(tmp, "identity.age.new")
+		target := filepath.Join(tmp, "identity.age")
+
+		require.NoError(t, os.WriteFile(staged, []byte("fake-staged-key-not-real"), 0o600))
+
+		require.NoError(t, promoteStagedIdentity(staged, target))
+		assert.FileExists(t, target)
+		assert.NoFileExists(t, staged)
+	})
+
+	t.Run("tolerates a heal that already promoted the key", func(t *testing.T) {
+		tmp := t.TempDir()
+		staged := filepath.Join(tmp, "identity.age.new")
+		target := filepath.Join(tmp, "identity.age")
+
+		require.NoError(t, os.WriteFile(target, []byte("fake-key-not-real"), 0o600))
+
+		assert.NoError(t, promoteStagedIdentity(staged, target))
+		assert.FileExists(t, target)
+	})
+
+	t.Run("fails when neither staged nor identity exists", func(t *testing.T) {
+		tmp := t.TempDir()
+		staged := filepath.Join(tmp, "identity.age.new")
+		target := filepath.Join(tmp, "identity.age")
+
+		require.Error(t, promoteStagedIdentity(staged, target))
+	})
+}
+
+// TestAcquireIdentityLockMissingDirHintsInit covers B-04: the lock is
+// taken before the identity load, so a first-run passwd or rekey with
+// no config directory must still surface the init hint, not a raw
+// error about a missing lock file.
+func TestAcquireIdentityLockMissingDirHintsInit(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "nodir", "identity.age")
+
+	_, err := acquireIdentityLock(missing)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, identity.ErrNotFound)
+}
+
+// TestIdentityLockPathResolvesSymlink covers A-3: a symlink alias of the
+// identity must derive the same lock path as the real file, so two
+// spellings serialize against each other instead of taking two locks.
+func TestIdentityLockPathResolvesSymlink(t *testing.T) {
+	tmp := t.TempDir()
+	realPath := filepath.Join(tmp, "identity.age")
+
+	require.NoError(t, os.WriteFile(realPath, []byte("fake-key-not-real"), 0o600))
+
+	alias := filepath.Join(tmp, "alias.age")
+	require.NoError(t, os.Symlink(realPath, alias))
+
+	assert.Equal(t, identityLockPath(realPath), identityLockPath(alias),
+		"a symlink alias must derive the same lock path as the real identity")
 }
 
 // pipeWithInput returns the read end of a pipe holding input. Closing

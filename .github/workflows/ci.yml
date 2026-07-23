@@ -28,6 +28,12 @@ jobs:
       - name: Build
         run: make build
 
+      # The runner is linux, so the darwin-only termios constants in the
+      # no-echo prompt are otherwise first compiled at release time.
+      # Cross-compile for darwin here so a build break surfaces in CI.
+      - name: Cross-compile for darwin
+        run: GOOS=darwin go build ./...
+
       - name: Install lint tools
         run: |
           go install mvdan.cc/gofumpt@v0.10.0
