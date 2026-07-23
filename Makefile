@@ -4,6 +4,11 @@ LOCAL_VERSION  := $(shell git describe --tags --always --dirty)
 GO_VERSION     := 1.26
 GOBIN          := $(shell go env GOPATH)/bin
 GOVULNCHECK_VERSION := v1.6.0
+# The identity uses a real scrypt KDF, which is deliberately slow, and the
+# race detector multiplies that cost. The default 10m go test timeout is
+# too tight for the full suite on a slower CI runner, so the -race targets
+# get more headroom. This is wall-clock time, not a hang.
+RACE_TIMEOUT   := 20m
 
 .DEFAULT_GOAL := help
 
@@ -41,7 +46,7 @@ clean: ## Clean up build output and artifacts.
 
 .PHONY: cover
 cover: artifacts ## Run tests and write the coverage profile.
-	CGO_ENABLED=1 go test -race -coverprofile=artifacts/coverage.out -covermode=atomic ./...
+	CGO_ENABLED=1 go test -race -timeout $(RACE_TIMEOUT) -coverprofile=artifacts/coverage.out -covermode=atomic ./...
 
 .PHONY: cover-func
 cover-func: cover ## Per-function coverage summary in the terminal.
@@ -85,7 +90,7 @@ test: ## Run all Go tests. Fast, for the local loop.
 
 .PHONY: test-race
 test-race: ## Run all Go tests with the race detector. Slower, needs cgo. CI runs this.
-	CGO_ENABLED=1 go test -race -count=1 ./...
+	CGO_ENABLED=1 go test -race -count=1 -timeout $(RACE_TIMEOUT) ./...
 
 .PHONY: vuln
 vuln: ## Scan for known vulnerabilities in dependencies.
