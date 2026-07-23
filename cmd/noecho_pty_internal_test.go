@@ -46,13 +46,14 @@ func TestReadLineNoEchoOnPTY(t *testing.T) {
 		done <- outcome{line: line, err: readErr}
 	}()
 
-	// Let the prompt disable echo and block on its read before the input
-	// arrives, so the echo-off check observes the reading state.
-	time.Sleep(50 * time.Millisecond)
+	// Poll until the prompt has disabled echo and is blocked on its read,
+	// so the write below arrives with echo already off. A fixed sleep
+	// could be flaky under load.
+	require.Eventually(t, func() bool {
+		during, getErr := unix.IoctlGetTermios(slaveFd, ioctlReadTermios)
 
-	during, err := unix.IoctlGetTermios(slaveFd, ioctlReadTermios)
-	require.NoError(t, err)
-	assert.Zero(t, during.Lflag&unix.ECHO, "echo must be off while the prompt reads")
+		return getErr == nil && during.Lflag&unix.ECHO == 0
+	}, 2*time.Second, 10*time.Millisecond, "echo must go off while the prompt reads")
 
 	_, err = master.WriteString(typed + "\n")
 	require.NoError(t, err)

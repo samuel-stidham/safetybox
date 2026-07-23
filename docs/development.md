@@ -37,8 +37,9 @@ shipped binary is built with cgo disabled. CI runs `make test-race`.
 
 The no-echo passphrase prompt is tested against a real pseudo-terminal,
 so echo suppression and terminal restore are verified rather than
-assumed. That test uses the `creack/pty` helper and runs on Linux and
-macOS.
+assumed. That test uses the `creack/pty` helper. CI runs the suite on
+both a Linux and a macOS runner, so the darwin termios paths are
+exercised at runtime, not only cross-compiled.
 
 Two conventions are non-negotiable. Every envelope test includes a
 corrupt-one-byte case asserting decryption fails. Test fixtures use
@@ -72,7 +73,20 @@ modules from `go.sum`.
 Commits follow the conventional commit format and are GPG-signed.
 CI runs build, lint with a `git diff --exit-code` guard, tests under
 the race detector, a govulncheck scan, and a gitleaks history scan on
-every push and pull request.
+every push and pull request. A macOS runner also runs the fast suite,
+so the darwin termios paths run at runtime.
+
+## Code review
+
+Automated review policy lives in `REVIEW.md` at the repository root.
+The Kilo code reviewer reads it from the base branch of a pull request.
+So it must be committed to `main` to take effect.
+
+Local adversarial reviews, when run, write their reports to the repo
+root and keep them out of git. The two reviewer passes produce
+`REPORT-A.md` and `REPORT-B.md`, and the combined report is `REPORT.md`.
+These report names are always uppercase, and `.gitignore` excludes
+them. `REVIEW.md` is the tracked policy file, never a report.
 
 ## Releases
 

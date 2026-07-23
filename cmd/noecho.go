@@ -55,9 +55,10 @@ func readLineNoEcho(stdinFd int) ([]byte, error) {
 // onSignalRestore runs restore when the process receives an interrupt
 // or terminate signal, and returns a function that tears the handler
 // down. Registering with signal.Notify overrides the default exit for
-// these signals. So the process relies on the memguard interrupt
-// handler installed in main to actually exit. This handler only
-// restores the terminal, it does not exit.
+// these signals, so something else must still terminate the process.
+// In safetybox, main installs memguard.CatchInterrupt, which wipes the
+// enclave and exits. This restore handler only puts the terminal back.
+// It never exits.
 func onSignalRestore(restore func()) func() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, unix.SIGTERM)

@@ -12,7 +12,13 @@ versions follow [Semantic Versioning](https://semver.org/).
   low-priority roadmap item. It asserts echo is off while the prompt
   reads, the returned line is exact, and the terminal state is
   restored. It adds `github.com/creack/pty` as a test-only dependency,
-  which never reaches the shipped binary.
+  which never reaches the shipped binary. CI now runs the suite on a
+  macOS runner too, so the darwin termios paths run at runtime, not
+  only cross-compiled.
+- A `REVIEW.md` code-review policy at the repository root for the Kilo
+  AI reviewer. It records the security invariants, severity
+  calibration, files to skip, and sub-agent tiers specific to this
+  tool.
 
 ### Security
 
