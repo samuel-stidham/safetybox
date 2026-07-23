@@ -85,9 +85,10 @@ duration of one invocation and wiped afterward. Passphrase buffers
 are zeroed after use. Every reader that touches secret material wipes
 each buffer it outgrows. That covers the no-echo prompt, the stdin
 and file readers, the identity loader, and the envelope decrypt path.
-A failed read wipes its partial buffer and returns nothing. Go
-strings copied during parsing are outside that control, so this is
-hardening, not a guarantee against a debugger on your own machine.
+A failed read wipes its partial buffer and returns nothing. A
+successful read also wipes the unused tail of its buffer. Go strings
+copied during parsing are outside that control, so this is hardening,
+not a guarantee against a debugger on your own machine.
 
 ## Rotation and destruction
 

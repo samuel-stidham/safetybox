@@ -35,6 +35,12 @@ for the local loop, and `make test-race` adds it. `make test-race`
 forces `CGO_ENABLED=1`, because the detector needs cgo, even though the
 shipped binary is built with cgo disabled. CI runs `make test-race`.
 
+The no-echo passphrase prompt is tested against a real pseudo-terminal,
+so echo suppression and terminal restore are verified rather than
+assumed. That test uses the `creack/pty` helper. CI runs the suite on
+both a Linux and a macOS runner, so the darwin termios paths are
+exercised at runtime, not only cross-compiled.
+
 Two conventions are non-negotiable. Every envelope test includes a
 corrupt-one-byte case asserting decryption fails. Test fixtures use
 obviously fake material like `fake-test-passphrase-not-real`, never
@@ -55,9 +61,11 @@ safetybox, then third-party, enforced by gci with custom order.
 This is a secrets tool, so every module in go.sum is audit surface.
 The dependency list is deliberately short: age, modernc sqlite,
 cobra, memguard, testify, and the x/crypto, x/term, and x/sys
-families. x/sys backs the no-echo prompt's terminal control. Justify
-any addition in the PR description. A `vendor/` directory may exist
-locally for offline builds. It stays untracked, and CI resolves
+families. x/sys backs the no-echo prompt's terminal control. One
+test-only dependency, `creack/pty`, allocates a pseudo-terminal for
+the prompt's terminal test and never reaches the shipped binary.
+Justify any addition in the PR description. A `vendor/` directory may
+exist locally for offline builds. It stays untracked, and CI resolves
 modules from `go.sum`.
 
 ## Commits and CI
@@ -65,7 +73,16 @@ modules from `go.sum`.
 Commits follow the conventional commit format and are GPG-signed.
 CI runs build, lint with a `git diff --exit-code` guard, tests under
 the race detector, a govulncheck scan, and a gitleaks history scan on
-every push and pull request.
+every push and pull request. A macOS runner also runs the fast suite,
+so the darwin termios paths run at runtime.
+
+## Code review
+
+Local adversarial reviews, when run, write their reports to the repo
+root and keep them out of git. The two reviewer passes produce
+`REPORT-A.md` and `REPORT-B.md`, and the combined report is `REPORT.md`.
+These report names are always uppercase, and `.gitignore` excludes
+them. `REVIEW.md` is the tracked policy file, never a report.
 
 ## Releases
 

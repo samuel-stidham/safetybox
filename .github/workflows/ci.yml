@@ -66,12 +66,30 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # The no-echo prompt and its pseudo-terminal test use darwin-only
+  # termios paths. The build job only cross-compiles darwin, so run the
+  # suite on a real macOS runner to exercise those paths at runtime.
+  # darwin is a shipped target, so the tag and release jobs gate on this.
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+
+      - name: Test
+        run: make test
+
   # Tags are cut only from main commits that passed every gate above.
   # feat -> minor, fix -> patch, BREAKING CHANGE -> major. Commits
   # with no release-worthy type produce no tag and no release.
   tag:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build, gitleaks]
+    needs: [build, gitleaks, test-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -98,8 +116,9 @@ jobs:
       ${{ !cancelled() &&
           needs.build.result == 'success' &&
           needs.gitleaks.result == 'success' &&
+          needs.test-macos.result == 'success' &&
           (startsWith(github.ref, 'refs/tags/v') || needs.tag.outputs.new_tag != '') }}
-    needs: [build, gitleaks, tag]
+    needs: [build, gitleaks, tag, test-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write

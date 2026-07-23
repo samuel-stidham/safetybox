@@ -49,6 +49,8 @@ artifacts/
 .LSOverride
 ._*
 
-# Adversarial Review Files
-REVIEW*.md
-review*.md
+# Adversarial review reports are always named in uppercase and kept out
+# of the repository: REPORT-A.md and REPORT-B.md for the two reviewer
+# passes, and REPORT.md for the combined report.
+REPORT.md
+REPORT-*.md

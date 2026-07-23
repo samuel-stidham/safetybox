@@ -5,6 +5,7 @@ go 1.26
 require (
 	filippo.io/age v1.3.1
 	github.com/awnumar/memguard v0.23.0
+	github.com/creack/pty v1.1.24
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sys v0.45.0
