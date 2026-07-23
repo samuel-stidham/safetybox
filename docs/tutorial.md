@@ -14,7 +14,7 @@ If you want the terse version of any command, the
 You need Go 1.26 or later to build from source.
 
 ```sh
-go install github.com/samuel-stidham/safetybox@latest
+go install github.com/samuel-stidham/safetybox/v2@latest
 ```
 
 That puts `safetybox` in `$GOPATH/bin`, which is `~/go/bin` by default.

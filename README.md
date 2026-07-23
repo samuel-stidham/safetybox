@@ -31,7 +31,7 @@ own address, and decryption fails if the ciphertext was moved or swapped.
 Install the latest tagged release with Go 1.26 or later.
 
 ```sh
-go install github.com/samuel-stidham/safetybox@latest
+go install github.com/samuel-stidham/safetybox/v2@latest
 ```
 
 Or build from source.

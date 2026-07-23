@@ -1,15 +1,16 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 
-	"github.com/samuel-stidham/safetybox/internal/envelope"
-	"github.com/samuel-stidham/safetybox/internal/identity"
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v2/internal/identity"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -42,6 +43,17 @@ func runRekey(cobraCmd *cobra.Command, opts *options) error {
 		return err
 	}
 
+	// Serialize against other identity-rewriting runs BEFORE the heal
+	// and the load. Without this, a second rekey deletes this run's
+	// staged key mid-reseal and the vault commits to a key that no
+	// longer exists anywhere on disk.
+	unlock, err := acquireIdentityLock(identityPath)
+	if err != nil {
+		return err
+	}
+
+	defer unlock()
+
 	// Heal a prior rekey that crashed mid-swap before doing anything
 	// else, so the load below sees a real identity file.
 	if err := completeInterruptedRekey(identityPath); err != nil {
@@ -64,44 +76,61 @@ func runRekey(cobraCmd *cobra.Command, opts *options) error {
 
 	stagedPath := identityPath + ".new"
 
+	ctx := cobraCmd.Context()
+
 	// Refuse to touch anything unless the vault is really encrypted to
 	// the loaded identity. A previous rekey that committed the vault
 	// but crashed before the identity swap leaves the OLD key at
 	// identityPath, loading cleanly, while the only key that can read
 	// the vault sits at the staged sibling. Deleting that staged file
 	// as "stale" would destroy every secret forever.
-	if err := ensureVaultOnIdentity(opts, oldKey, identityPath, stagedPath); err != nil {
+	if err := ensureVaultOnIdentity(ctx, opts, oldKey, identityPath, stagedPath); err != nil {
 		return err
 	}
 
+	output, err := rotateToNewKey(cobraCmd, opts, oldKey, identityPath, stagedPath, passphrase)
+	if err != nil {
+		return err
+	}
+
+	return printJSON(cobraCmd, opts, *output)
+}
+
+// rotateToNewKey generates the replacement identity, stages it, rekeys
+// the vault, and swaps the identity files. It runs under the identity
+// lock, with the vault already verified to be on oldKey.
+func rotateToNewKey(
+	cobraCmd *cobra.Command, opts *options, oldKey *age.X25519Identity,
+	identityPath, stagedPath string, passphrase []byte,
+) (*rekeyOutput, error) {
 	newKey, err := age.GenerateX25519Identity()
 	if err != nil {
-		return fmt.Errorf("generate new identity: %w", err)
+		return nil, fmt.Errorf("generate new identity: %w", err)
 	}
 
 	// The new identity is written beside the old one BEFORE the vault
 	// transaction, so a crash can never leave re-encrypted envelopes
 	// without their key on disk.
 	if err := stageNewIdentity(stagedPath, newKey, passphrase); err != nil {
-		return err
+		return nil, err
 	}
 
 	count, err := rekeyVault(cobraCmd, opts, oldKey, newKey)
 	if err != nil {
 		_ = os.Remove(stagedPath)
 
-		return err
+		return nil, err
 	}
 
 	if err := swapIdentityFiles(identityPath, stagedPath); err != nil {
-		return err
+		return nil, err
 	}
 
-	return printJSON(cobraCmd, opts, rekeyOutput{
+	return &rekeyOutput{
 		Recipient:       newKey.Recipient().String(),
 		RekeyedVersions: count,
 		BackupIdentity:  identityPath + ".bak",
-	})
+	}, nil
 }
 
 // ensureVaultOnIdentity verifies the vault's stored recipient matches
@@ -110,13 +139,15 @@ func runRekey(cobraCmd *cobra.Command, opts *options) error {
 // the vault is on that key: a rekey that committed the vault and then
 // crashed before the swap leaves the old key in place and the live
 // key at the staged sibling.
-func ensureVaultOnIdentity(opts *options, oldKey *age.X25519Identity, identityPath, stagedPath string) error {
-	openedVault, err := opts.openVault()
+func ensureVaultOnIdentity(
+	ctx context.Context, opts *options, oldKey *age.X25519Identity, identityPath, stagedPath string,
+) error {
+	openedVault, err := opts.openVault(ctx)
 	if err != nil {
 		return err
 	}
 
-	stored, err := openedVault.Recipient()
+	stored, err := openedVault.Recipient(ctx)
 
 	_ = openedVault.Close()
 
@@ -166,14 +197,16 @@ func stageNewIdentity(stagedPath string, newKey *age.X25519Identity, passphrase 
 }
 
 func rekeyVault(cobraCmd *cobra.Command, opts *options, oldKey, newKey *age.X25519Identity) (int64, error) {
-	openedVault, err := opts.openVault()
+	ctx := cobraCmd.Context()
+
+	openedVault, err := opts.openVault(ctx)
 	if err != nil {
 		return 0, err
 	}
 
 	defer func() { _ = openedVault.Close() }()
 
-	count, err := openedVault.Rekey(newKey.Recipient().String(),
+	count, err := openedVault.Rekey(ctx, newKey.Recipient().String(),
 		func(name string, number int64, blob []byte) ([]byte, error) {
 			address := vault.CanonicalAddress(name, number)
 

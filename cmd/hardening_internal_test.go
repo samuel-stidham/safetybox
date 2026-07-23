@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/base64"
 	"errors"
@@ -127,7 +126,7 @@ func swapVaultRecipient(t *testing.T, vaultPath, recipient string) {
 
 	defer func() { require.NoError(t, handle.Close()) }()
 
-	_, err = handle.ExecContext(context.Background(),
+	_, err = handle.ExecContext(t.Context(),
 		"UPDATE vault_meta SET value = ? WHERE key = 'recipient'", recipient)
 	require.NoError(t, err)
 }
@@ -204,4 +203,36 @@ func TestExecSignalDeathMapsToShellCode(t *testing.T) {
 
 	require.ErrorAs(t, err, &exit)
 	assert.Equal(t, 137, exit.code, "SIGKILL death must map to 128+9")
+}
+
+// TestRekeyRefusesWhileIdentityLockIsHeld pins the concurrent-rekey
+// guard: while one identity operation holds the lock, a second rekey
+// refuses up front instead of deleting the first one's staged key and
+// destroying the only key that reads the vault. passwd shares the same
+// lock, so one refusal test covers the serialization for both verbs.
+func TestRekeyRefusesWhileIdentityLockIsHeld(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	unlock, err := acquireIdentityLock(fixture.identityPath)
+	require.NoError(t, err)
+
+	t.Cleanup(unlock)
+
+	_, _, err = fixture.run("", "rekey")
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "another safetybox rekey or passwd is running")
+}
+
+// TestRekeyRunsAfterLockIsReleased pins that the lock is advisory and
+// transient: once the holder releases it, a rekey proceeds normally.
+func TestRekeyRunsAfterLockIsReleased(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	unlock, err := acquireIdentityLock(fixture.identityPath)
+	require.NoError(t, err)
+
+	unlock()
+
+	fixture.runOK("", "rekey")
 }

@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/samuel-stidham/safetybox/internal/logging"
-	"github.com/samuel-stidham/safetybox/internal/secret"
+	"github.com/samuel-stidham/safetybox/v2/internal/logging"
+	"github.com/samuel-stidham/safetybox/v2/internal/secret"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

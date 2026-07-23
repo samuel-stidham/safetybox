@@ -1,19 +1,59 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"syscall"
 
-	"github.com/samuel-stidham/safetybox/internal/envelope"
-	"github.com/samuel-stidham/safetybox/internal/identity"
-	"github.com/samuel-stidham/safetybox/internal/secret"
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v2/internal/identity"
+	"github.com/samuel-stidham/safetybox/v2/internal/secret"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
 )
+
+// lockFileMode matches the identity file's private mode.
+const lockFileMode = 0o600
+
+// acquireIdentityLock serializes the verbs that rewrite the identity
+// file. Two interleaved rekeys share one staging path, so the second
+// deletes the first's staged key while the first commits the vault to
+// it, which destroys the only key able to read the vault. An exclusive
+// advisory lock on a .lock sibling closes that window for rekey and
+// passwd both. The kernel drops the lock when the process exits, so a
+// crash never wedges a later run. The empty lock file is left in place
+// on purpose: removing it would let a third process lock a fresh inode
+// while the second still holds the old one.
+func acquireIdentityLock(identityPath string) (func(), error) {
+	lockPath := filepath.Clean(identityPath + ".lock")
+
+	file, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, lockFileMode)
+	if err != nil {
+		return nil, fmt.Errorf("open identity lock %s: %w", lockPath, err)
+	}
+
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = file.Close()
+
+		return nil, fmt.Errorf(
+			"another safetybox rekey or passwd is running against %s: retry when it finishes: %w",
+			identityPath, err,
+		)
+	}
+
+	release := func() {
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = file.Close()
+	}
+
+	return release, nil
+}
 
 // warnLooseVaultPerms warns once per invocation when the vault file,
 // its directory, or its WAL siblings grant group or world access. It
@@ -38,13 +78,13 @@ func warnLooseVaultPerms(cobraCmd *cobra.Command, opts *options) {
 
 // openVault resolves the vault path and opens it with a user-facing
 // hint on failure.
-func (o *options) openVault() (*vault.Vault, error) {
+func (o *options) openVault(ctx context.Context) (*vault.Vault, error) {
 	path, err := o.resolveVaultPath()
 	if err != nil {
 		return nil, err
 	}
 
-	opened, err := vault.Open(path)
+	opened, err := vault.Open(ctx, path)
 	if err != nil {
 		return nil, userHint(err)
 	}
@@ -54,8 +94,8 @@ func (o *options) openVault() (*vault.Vault, error) {
 
 // storedRecipient reads and parses the vault's recipient. Write verbs
 // need nothing else, which is the point of the asymmetric model.
-func storedRecipient(openedVault *vault.Vault) (*age.X25519Recipient, error) {
-	stored, err := openedVault.Recipient()
+func storedRecipient(ctx context.Context, openedVault *vault.Vault) (*age.X25519Recipient, error) {
+	stored, err := openedVault.Recipient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read stored recipient: %w", err)
 	}
@@ -214,14 +254,16 @@ type resolved struct {
 // enabled version of name. It warns on stderr when the secret is
 // expired, and still resolves it.
 func resolveNewest(cobraCmd *cobra.Command, opts *options, name string) (*resolved, error) {
-	openedVault, err := opts.openVault()
+	ctx := cobraCmd.Context()
+
+	openedVault, err := opts.openVault(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	newest, err := openedVault.NewestEnabled(name)
+	newest, err := openedVault.NewestEnabled(ctx, name)
 
-	recipient, recipientErr := openedVault.Recipient()
+	recipient, recipientErr := openedVault.Recipient(ctx)
 
 	_ = openedVault.Close()
 

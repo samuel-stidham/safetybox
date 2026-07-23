@@ -1,13 +1,12 @@
 package vault_test
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,14 +25,14 @@ func vaultPath(t *testing.T) string {
 func TestCreateAndOpen(t *testing.T) {
 	path := vaultPath(t)
 
-	require.NoError(t, vault.Create(path, fakeRecipient))
+	require.NoError(t, vault.Create(t.Context(), path, fakeRecipient))
 
-	opened, err := vault.Open(path)
+	opened, err := vault.Open(t.Context(), path)
 	require.NoError(t, err)
 
 	t.Cleanup(func() { assert.NoError(t, opened.Close()) })
 
-	recipient, err := opened.Recipient()
+	recipient, err := opened.Recipient(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, fakeRecipient, recipient)
 	assert.Equal(t, path, opened.Path())
@@ -42,7 +41,7 @@ func TestCreateAndOpen(t *testing.T) {
 func TestCreateSetsRestrictivePermissions(t *testing.T) {
 	path := vaultPath(t)
 
-	require.NoError(t, vault.Create(path, fakeRecipient))
+	require.NoError(t, vault.Create(t.Context(), path, fakeRecipient))
 
 	fileInfo, err := os.Stat(path)
 	require.NoError(t, err)
@@ -59,15 +58,15 @@ func TestCreateSetsRestrictivePermissions(t *testing.T) {
 func TestWALSiblingInheritsPermissions(t *testing.T) {
 	path := vaultPath(t)
 
-	require.NoError(t, vault.Create(path, fakeRecipient))
+	require.NoError(t, vault.Create(t.Context(), path, fakeRecipient))
 
-	opened, err := vault.Open(path)
+	opened, err := vault.Open(t.Context(), path)
 	require.NoError(t, err)
 
 	t.Cleanup(func() { assert.NoError(t, opened.Close()) })
 
 	// Any write materializes the -wal sibling.
-	_, err = opened.AppendVersion("wal/probe", vault.SetOptions{}, fakeSealer(t))
+	_, err = opened.AppendVersion(t.Context(), "wal/probe", vault.SetOptions{}, fakeSealer(t))
 	require.NoError(t, err)
 
 	walInfo, err := os.Stat(path + "-wal")
@@ -78,38 +77,38 @@ func TestWALSiblingInheritsPermissions(t *testing.T) {
 func TestCreateRefusesExistingVault(t *testing.T) {
 	path := vaultPath(t)
 
-	require.NoError(t, vault.Create(path, fakeRecipient))
+	require.NoError(t, vault.Create(t.Context(), path, fakeRecipient))
 
-	err := vault.Create(path, fakeRecipient)
+	err := vault.Create(t.Context(), path, fakeRecipient)
 	require.ErrorIs(t, err, vault.ErrVaultExists)
 }
 
 func TestOpenMissingVault(t *testing.T) {
-	_, err := vault.Open(vaultPath(t))
+	_, err := vault.Open(t.Context(), vaultPath(t))
 	require.ErrorIs(t, err, vault.ErrVaultNotFound)
 }
 
 func TestOpenRejectsUnknownFormatVersion(t *testing.T) {
 	path := vaultPath(t)
 
-	require.NoError(t, vault.Create(path, fakeRecipient))
+	require.NoError(t, vault.Create(t.Context(), path, fakeRecipient))
 
 	raw, err := sql.Open("sqlite", "file:"+path)
 	require.NoError(t, err)
 
-	_, err = raw.ExecContext(context.Background(),
+	_, err = raw.ExecContext(t.Context(),
 		"UPDATE vault_meta SET value = '999' WHERE key = 'format_version'")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
-	_, err = vault.Open(path)
+	_, err = vault.Open(t.Context(), path)
 	require.ErrorIs(t, err, vault.ErrFormatVersion)
 }
 
 func TestCreateUsesWALAndSchemaV1(t *testing.T) {
 	path := vaultPath(t)
 
-	require.NoError(t, vault.Create(path, fakeRecipient))
+	require.NoError(t, vault.Create(t.Context(), path, fakeRecipient))
 
 	raw, err := sql.Open("sqlite", "file:"+path)
 	require.NoError(t, err)
@@ -118,14 +117,14 @@ func TestCreateUsesWALAndSchemaV1(t *testing.T) {
 
 	var journalMode string
 
-	row := raw.QueryRowContext(context.Background(), "PRAGMA journal_mode")
+	row := raw.QueryRowContext(t.Context(), "PRAGMA journal_mode")
 	require.NoError(t, row.Scan(&journalMode))
 	assert.Equal(t, "wal", journalMode)
 
 	for _, table := range []string{"vault_meta", "secret", "secret_version"} {
 		var name string
 
-		row := raw.QueryRowContext(context.Background(),
+		row := raw.QueryRowContext(t.Context(),
 			"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", table)
 		require.NoError(t, row.Scan(&name), "table %s must exist", table)
 	}
@@ -139,11 +138,11 @@ func TestOpenRejectsForeignDatabase(t *testing.T) {
 	raw, err := sql.Open("sqlite", "file:"+path)
 	require.NoError(t, err)
 
-	_, err = raw.ExecContext(context.Background(), "CREATE TABLE unrelated (id INTEGER PRIMARY KEY)")
+	_, err = raw.ExecContext(t.Context(), "CREATE TABLE unrelated (id INTEGER PRIMARY KEY)")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
-	_, err = vault.Open(path)
+	_, err = vault.Open(t.Context(), path)
 	require.Error(t, err, "a sqlite file without vault_meta is not a vault")
 }
 
@@ -153,7 +152,7 @@ func TestOpenRejectsGarbageFile(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, []byte("this is not a sqlite database"), 0o600))
 
-	_, err := vault.Open(path)
+	_, err := vault.Open(t.Context(), path)
 	require.Error(t, err)
 }
 
@@ -167,7 +166,7 @@ func TestOpenReportsCorruptVault(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	require.NoError(t, os.WriteFile(path, nil, 0o600))
 
-	_, err := vault.Open(path)
+	_, err := vault.Open(t.Context(), path)
 	require.ErrorIs(t, err, vault.ErrVaultCorrupt)
 }
 
@@ -180,17 +179,17 @@ func TestOpenReportsCorruptVault(t *testing.T) {
 func TestOpenReportsCorruptVaultOnMissingVersionRow(t *testing.T) {
 	path := vaultPath(t)
 
-	require.NoError(t, vault.Create(path, fakeRecipient))
+	require.NoError(t, vault.Create(t.Context(), path, fakeRecipient))
 
 	raw, err := sql.Open("sqlite", "file:"+path)
 	require.NoError(t, err)
 
-	_, err = raw.ExecContext(context.Background(),
+	_, err = raw.ExecContext(t.Context(),
 		"DELETE FROM vault_meta WHERE key = 'format_version'")
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
-	_, err = vault.Open(path)
+	_, err = vault.Open(t.Context(), path)
 	require.ErrorIs(t, err, vault.ErrVaultCorrupt)
 }
 
@@ -199,7 +198,7 @@ func TestOpenReportsCorruptVaultOnMissingVersionRow(t *testing.T) {
 func TestLoosePermissionsFlagsLooseFile(t *testing.T) {
 	path := vaultPath(t)
 
-	require.NoError(t, vault.Create(path, fakeRecipient))
+	require.NoError(t, vault.Create(t.Context(), path, fakeRecipient))
 	require.NoError(t, os.Chmod(path, 0o644))
 
 	loose := vault.LoosePermissions(path)
@@ -224,7 +223,7 @@ func TestLoosePermissionsFlagsLooseFile(t *testing.T) {
 func TestLoosePermissionsCleanVaultIsEmpty(t *testing.T) {
 	path := vaultPath(t)
 
-	require.NoError(t, vault.Create(path, fakeRecipient))
+	require.NoError(t, vault.Create(t.Context(), path, fakeRecipient))
 
 	assert.Empty(t, vault.LoosePermissions(path))
 }
@@ -232,14 +231,14 @@ func TestLoosePermissionsCleanVaultIsEmpty(t *testing.T) {
 func TestSchemaRejectsInvalidState(t *testing.T) {
 	path := vaultPath(t)
 
-	require.NoError(t, vault.Create(path, fakeRecipient))
+	require.NoError(t, vault.Create(t.Context(), path, fakeRecipient))
 
 	raw, err := sql.Open("sqlite", "file:"+path)
 	require.NoError(t, err)
 
 	t.Cleanup(func() { assert.NoError(t, raw.Close()) })
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err = raw.ExecContext(ctx,
 		`INSERT INTO secret (name, created_at, updated_at) VALUES ('testing/fake', '2026-01-01', '2026-01-01')`)

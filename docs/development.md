@@ -7,10 +7,11 @@ How to build, test, and release safetybox.
 `make help` lists every target. The daily loop is three commands.
 
 ```sh
-make dev    # build bin/safetybox with a -dev version suffix
-make lint   # gofumpt, gci, golangci-lint, all fixers on
-make test   # go test -race, with cgo on for the detector
-make vuln   # govulncheck against the dependency tree
+make dev       # build bin/safetybox with a -dev version suffix
+make lint      # gofumpt, gci, golangci-lint, all fixers on
+make test      # fast tests, for the local loop
+make test-race # tests under the race detector, needs cgo, what CI runs
+make vuln      # govulncheck against the dependency tree
 ```
 
 `make dev` builds into `bin/` and tags the version with `-dev` so a
@@ -27,9 +28,12 @@ Tests run against real SQLite databases in `t.TempDir()` and real
 age keys generated per test. There are no mocks. The cmd package
 carries an end-to-end suite that drives the CLI in process through
 init, set, rotation, disable, revoke, exec, rekey, passwd, delete,
-purge, and revive. `make test` runs the race detector, so it forces
-`CGO_ENABLED=1` for the test build even though the shipped binary is
-built with cgo disabled.
+purge, and revive. Because the suite exercises real age scrypt on
+every identity load, it is not instant, and the race detector makes it
+several times slower again. So `make test` runs without the detector
+for the local loop, and `make test-race` adds it. `make test-race`
+forces `CGO_ENABLED=1`, because the detector needs cgo, even though the
+shipped binary is built with cgo disabled. CI runs `make test-race`.
 
 Two conventions are non-negotiable. Every envelope test includes a
 corrupt-one-byte case asserting decryption fails. Test fixtures use

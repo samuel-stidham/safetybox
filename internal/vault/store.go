@@ -117,12 +117,12 @@ func findSecret(ctx context.Context, q querier, name string) (secretRow, error) 
 // transaction. It creates the secret row on first use and revives a
 // soft-deleted secret. The seal callback receives the canonical
 // address of the new version so the envelope binds to its row.
-func (v *Vault) AppendVersion(name string, opts SetOptions, seal Sealer) (*AppendResult, error) {
+func (v *Vault) AppendVersion(
+	ctx context.Context, name string, opts SetOptions, seal Sealer,
+) (*AppendResult, error) {
 	if err := ValidateName(name); err != nil {
 		return nil, err
 	}
-
-	ctx := context.Background()
 
 	txn, err := v.handle.BeginTx(ctx, nil)
 	if err != nil {
@@ -285,9 +285,7 @@ func revokeOlderVersions(ctx context.Context, txn *sql.Tx, secretID, keepVersion
 
 // NewestEnabled returns the newest enabled version of name with its
 // envelope. Deleted secrets do not resolve.
-func (v *Vault) NewestEnabled(name string) (*Resolved, error) {
-	ctx := context.Background()
-
+func (v *Vault) NewestEnabled(ctx context.Context, name string) (*Resolved, error) {
 	row, err := findSecret(ctx, v.handle, name)
 	if err != nil {
 		return nil, err
@@ -335,9 +333,7 @@ func (v *Vault) NewestEnabled(name string) (*Resolved, error) {
 // Meta returns the secret row and all its versions, including
 // soft-deleted secrets and destroyed versions. It never touches
 // envelopes.
-func (v *Vault) Meta(name string) (SecretMeta, []VersionMeta, error) {
-	ctx := context.Background()
-
+func (v *Vault) Meta(ctx context.Context, name string) (SecretMeta, []VersionMeta, error) {
 	row, err := findSecret(ctx, v.handle, name)
 	if err != nil {
 		return SecretMeta{}, nil, err
@@ -408,7 +404,7 @@ func prefixArgs(prefix string) []any {
 
 // List returns non-deleted secrets whose name equals prefix or sits
 // under it as a whole segment. An empty prefix lists everything.
-func (v *Vault) List(prefix string) ([]Summary, error) {
+func (v *Vault) List(ctx context.Context, prefix string) ([]Summary, error) {
 	query := summaryQuery
 
 	var args []any
@@ -418,18 +414,18 @@ func (v *Vault) List(prefix string) ([]Summary, error) {
 		args = prefixArgs(prefix)
 	}
 
-	return v.summaries(query+" GROUP BY s.id ORDER BY s.name", args...)
+	return v.summaries(ctx, query+" GROUP BY s.id ORDER BY s.name", args...)
 }
 
 // Stale returns non-deleted secrets whose expiry has passed.
-func (v *Vault) Stale(now time.Time) ([]Summary, error) {
+func (v *Vault) Stale(ctx context.Context, now time.Time) ([]Summary, error) {
 	query := summaryQuery + " AND s.expires_at IS NOT NULL AND s.expires_at <= ? GROUP BY s.id ORDER BY s.name"
 
-	return v.summaries(query, formatTime(now))
+	return v.summaries(ctx, query, formatTime(now))
 }
 
-func (v *Vault) summaries(query string, args ...any) ([]Summary, error) {
-	rows, err := v.handle.QueryContext(context.Background(), query, args...)
+func (v *Vault) summaries(ctx context.Context, query string, args ...any) ([]Summary, error) {
+	rows, err := v.handle.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list secrets: %w", err)
 	}
@@ -467,9 +463,7 @@ func (v *Vault) summaries(query string, args ...any) ([]Summary, error) {
 
 // Disable marks one version disabled. Destroyed versions stay
 // destroyed and disabling twice is a no-op.
-func (v *Vault) Disable(name string, number int64) error {
-	ctx := context.Background()
-
+func (v *Vault) Disable(ctx context.Context, name string, number int64) error {
 	row, err := findSecret(ctx, v.handle, name)
 	if err != nil {
 		return err
@@ -517,9 +511,7 @@ func (v *Vault) Disable(name string, number int64) error {
 
 // SoftDelete marks the secret deleted. Its versions and envelopes
 // stay intact until purge.
-func (v *Vault) SoftDelete(name string) error {
-	ctx := context.Background()
-
+func (v *Vault) SoftDelete(ctx context.Context, name string) error {
 	row, err := findSecret(ctx, v.handle, name)
 	if err != nil {
 		return err
@@ -555,9 +547,7 @@ func (v *Vault) SoftDelete(name string) error {
 
 // Purge erases every envelope of the secret and marks all versions
 // destroyed, inside one transaction. Rows and history remain.
-func (v *Vault) Purge(name string) (int64, error) {
-	ctx := context.Background()
-
+func (v *Vault) Purge(ctx context.Context, name string) (int64, error) {
 	txn, err := v.handle.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin purge transaction: %w", err)
@@ -601,7 +591,7 @@ func (v *Vault) Purge(name string) (int64, error) {
 	// effort for the same reason as rekey. The purge is already
 	// committed, so a checkpoint error must not report the committed
 	// purge as a failure. The next checkpoint reclaims the frames.
-	_ = v.Checkpoint()
+	_ = v.Checkpoint(ctx)
 
 	return destroyed, nil
 }
@@ -617,10 +607,10 @@ func (v *Vault) Purge(name string) (int64, error) {
 // destructive operation is already committed. Callers that must know
 // the scrub happened, such as the purge and rekey verbs warning the
 // user, call this again and check the error.
-func (v *Vault) Checkpoint() error {
+func (v *Vault) Checkpoint(ctx context.Context) error {
 	var busy, logFrames, checkpointed int64
 
-	err := v.handle.QueryRowContext(context.Background(),
+	err := v.handle.QueryRowContext(ctx,
 		"PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logFrames, &checkpointed)
 	if err != nil {
 		return fmt.Errorf("checkpoint wal: %w", err)
@@ -659,10 +649,10 @@ func entriesQuery(filter EntryFilter) (string, []any) {
 
 // Entries returns the newest enabled version of every non-deleted
 // secret matching filter, ordered by name.
-func (v *Vault) Entries(filter EntryFilter) ([]Entry, error) {
+func (v *Vault) Entries(ctx context.Context, filter EntryFilter) ([]Entry, error) {
 	query, args := entriesQuery(filter)
 
-	rows, err := v.handle.QueryContext(context.Background(), query, args...)
+	rows, err := v.handle.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("batch entries: %w", err)
 	}
@@ -700,20 +690,19 @@ func (v *Vault) Entries(filter EntryFilter) ([]Entry, error) {
 	return entries, nil
 }
 
-// liveVersion is one row rekey must re-encrypt.
+// liveVersion identifies one row rekey must re-encrypt. It carries no
+// envelope, because rekey fetches each envelope in turn so the whole
+// vault's ciphertext is never resident at once.
 type liveVersion struct {
-	id       int64
-	name     string
-	number   int64
-	envelope []byte
+	id     int64
+	name   string
+	number int64
 }
 
 // Rekey re-encrypts every non-destroyed version through reseal and
 // stores the new recipient, all inside ONE transaction. The recipient
 // update happens last. Any failure rolls the whole vault back.
-func (v *Vault) Rekey(newRecipient string, reseal Resealer) (int64, error) {
-	ctx := context.Background()
-
+func (v *Vault) Rekey(ctx context.Context, newRecipient string, reseal Resealer) (int64, error) {
 	txn, err := v.handle.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin rekey transaction: %w", err)
@@ -727,7 +716,15 @@ func (v *Vault) Rekey(newRecipient string, reseal Resealer) (int64, error) {
 	}
 
 	for _, version := range live {
-		resealed, err := reseal(version.name, version.number, version.envelope)
+		var envelope []byte
+
+		err := txn.QueryRowContext(ctx,
+			"SELECT envelope FROM secret_version WHERE id = ?", version.id).Scan(&envelope)
+		if err != nil {
+			return 0, fmt.Errorf("read %s version %d: %w", version.name, version.number, err)
+		}
+
+		resealed, err := reseal(version.name, version.number, envelope)
 		if err != nil {
 			return 0, fmt.Errorf("reseal %s version %d: %w", version.name, version.number, err)
 		}
@@ -755,14 +752,17 @@ func (v *Vault) Rekey(newRecipient string, reseal Resealer) (int64, error) {
 	// checkpoint error here would destroy the only key that can read
 	// the re-encrypted vault. An unscrubbed WAL frame, cleaned up by
 	// the next checkpoint, is the lesser evil than a locked vault.
-	_ = v.Checkpoint()
+	_ = v.Checkpoint(ctx)
 
 	return int64(len(live)), nil
 }
 
 func collectLiveVersions(ctx context.Context, txn *sql.Tx) ([]liveVersion, error) {
+	// Select only the row identity, not the envelope. Loading every
+	// envelope here would hold the whole vault's ciphertext at once. The
+	// rekey loop fetches each envelope in turn instead.
 	rows, err := txn.QueryContext(ctx,
-		`SELECT sv.id, s.name, sv.version_number, sv.envelope
+		`SELECT sv.id, s.name, sv.version_number
 		 FROM secret_version sv JOIN secret s ON s.id = sv.secret_id
 		 WHERE sv.state != ? AND sv.envelope IS NOT NULL
 		 ORDER BY s.name, sv.version_number`,
@@ -778,7 +778,7 @@ func collectLiveVersions(ctx context.Context, txn *sql.Tx) ([]liveVersion, error
 	for rows.Next() {
 		var version liveVersion
 
-		if err := rows.Scan(&version.id, &version.name, &version.number, &version.envelope); err != nil {
+		if err := rows.Scan(&version.id, &version.name, &version.number); err != nil {
 			return nil, fmt.Errorf("scan live version: %w", err)
 		}
 

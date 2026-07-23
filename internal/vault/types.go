@@ -111,9 +111,8 @@ func CanonicalAddress(name string, number int64) string {
 	return fmt.Sprintf("api/v1/%s/%d", name, number)
 }
 
-// nameGrammar is the hierarchical name grammar: segments of letters,
-// digits, dots, underscores, and dashes, joined by single slashes. It
-// is compiled once at package load, not per call.
+// nameGrammar is compiled once at package load and enforced by
+// [ValidateName], which documents the grammar itself.
 var nameGrammar = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$`)
 
 // ValidateName enforces the hierarchical name grammar: segments of

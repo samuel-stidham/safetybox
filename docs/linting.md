@@ -54,24 +54,39 @@ so the finding is the point of the test. All other gosec rules still
 apply to tests, including G101, which keeps real-looking credentials
 out of fixtures.
 
-## Inline suppressions in production code
+**gosec, rule G204, in `cmd/review_fixes_internal_test.go` only.** The
+shell round-trip test sources the reveal verb's own emitted assignments
+in a real `sh` and `fish` to prove the quoting is injection-safe.
+Spawning the shell is the test, so the finding cannot be designed away.
+The exclusion is scoped to that one file, so G204 still flags any other
+test that spawns a subprocess with genuinely tainted input.
 
-There is exactly one, and this list must stay short.
+**wrapcheck, the `io.Reader.Read` pass-through, in
+`internal/secret/secret_test.go` only.** The wiping-reader tests use a
+double that forwards `Read` to a wrapped source. The double must return
+the source's error verbatim, because `ReadAllWiping` detects end of
+input from that error and altering it would change what the reader
+under test sees. The exclusion matches only that one method signature
+in that one file, so every other error in the file still answers to
+wrapcheck.
 
-**cmd/exec.go, gosec G204.** G204 guards against untrusted input
-reaching a subprocess. The exec verb exists to run the user's own
-command line with secrets in the environment. The input is the
-operator's own argv, so no sanitization could keep the verb useful.
+## Linters excluded in production code
 
-## Inline suppressions in test code
+**gosec, rule G204, in `cmd/exec.go` only.** G204 guards against
+untrusted input reaching a subprocess. The exec verb exists to run the
+operator's own command line with secrets in the environment. The input
+is that operator's own argv, so no sanitization could keep the verb
+useful. The exclusion is scoped to this one file, so G204 still flags
+any other production subprocess call with genuinely tainted input.
+Within the file it covers every line, current and future, which is the
+cost of keeping suppressions out of the code. A new subprocess call
+added to this file gets no G204 finding, so review any such addition
+by hand.
 
-**cmd/review_fixes_internal_test.go, gosec G204.** The shell
-round-trip test sources the reveal verb's own emitted assignments in a
-real `sh` and `fish` to prove the quoting is injection-safe. Spawning
-the shell is the test, so the finding cannot be designed away.
-G204 stays inline rather than excluded for all test files, because a
-future test that spawns a subprocess with genuinely tainted input
-should still be flagged.
+## Inline suppressions
+
+There are none. Every exclusion lives in `.golangci.yml` with a
+justification above, so a suppression is never hidden at a call site.
 
 ## Adding an exclusion
 

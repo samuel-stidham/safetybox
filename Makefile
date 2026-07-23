@@ -1,8 +1,9 @@
 BIN            := safetybox
-PKG            := github.com/samuel-stidham/$(BIN)
+PKG            := github.com/samuel-stidham/$(BIN)/v2
 LOCAL_VERSION  := $(shell git describe --tags --always --dirty)
 GO_VERSION     := 1.26
 GOBIN          := $(shell go env GOPATH)/bin
+GOVULNCHECK_VERSION := v1.6.0
 
 .DEFAULT_GOAL := help
 
@@ -79,9 +80,13 @@ lint-go: ## Run golangci-lint.
 lint: gofumpt gci lint-go ## Run the linters.
 
 .PHONY: test
-test: ## Run all Go tests with the race detector.
+test: ## Run all Go tests. Fast, for the local loop.
+	go test -count=1 ./...
+
+.PHONY: test-race
+test-race: ## Run all Go tests with the race detector. Slower, needs cgo. CI runs this.
 	CGO_ENABLED=1 go test -race -count=1 ./...
 
 .PHONY: vuln
 vuln: ## Scan for known vulnerabilities in dependencies.
-	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...

@@ -3,7 +3,7 @@ package cmd
 import (
 	"errors"
 
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"github.com/spf13/cobra"
 )
@@ -40,14 +40,16 @@ func newPurgeCmd(opts *options) *cobra.Command {
 }
 
 func runPurge(cobraCmd *cobra.Command, opts *options, name string) error {
-	openedVault, err := opts.openVault()
+	ctx := cobraCmd.Context()
+
+	openedVault, err := opts.openVault(ctx)
 	if err != nil {
 		return err
 	}
 
 	defer func() { _ = openedVault.Close() }()
 
-	destroyed, err := openedVault.Purge(name)
+	destroyed, err := openedVault.Purge(ctx, name)
 	if err != nil {
 		return userHint(err)
 	}
@@ -65,7 +67,9 @@ func runPurge(cobraCmd *cobra.Command, opts *options, name string) error {
 // never a failure: the erased bytes stay recoverable from WAL frames
 // until a later checkpoint truncates them.
 func warnIfCheckpointBlocked(cobraCmd *cobra.Command, openedVault *vault.Vault) {
-	err := openedVault.Checkpoint()
+	ctx := cobraCmd.Context()
+
+	err := openedVault.Checkpoint(ctx)
 	if err == nil {
 		return
 	}

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -8,8 +9,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/samuel-stidham/safetybox/internal/secret"
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/secret"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"github.com/spf13/cobra"
 )
@@ -104,7 +105,9 @@ func validateRevealRequest(names []string, flags revealFlags, jsonCompact bool) 
 }
 
 func runReveal(cobraCmd *cobra.Command, opts *options, names []string, flags revealFlags) error {
-	entries, recipient, err := collectRevealEntries(opts, names, flags)
+	ctx := cobraCmd.Context()
+
+	entries, recipient, err := collectRevealEntries(ctx, opts, names, flags)
 	if err != nil {
 		return err
 	}
@@ -141,26 +144,28 @@ func runReveal(cobraCmd *cobra.Command, opts *options, names []string, flags rev
 // vault's stored recipient for the decrypt path to verify. Explicit
 // names resolve one by one so a missing or deleted name fails loudly.
 // Filters select whatever matches, and matching nothing is fine.
-func collectRevealEntries(opts *options, names []string, flags revealFlags) ([]vault.Entry, string, error) {
-	openedVault, err := opts.openVault()
+func collectRevealEntries(
+	ctx context.Context, opts *options, names []string, flags revealFlags,
+) ([]vault.Entry, string, error) {
+	openedVault, err := opts.openVault(ctx)
 	if err != nil {
 		return nil, "", err
 	}
 
 	defer func() { _ = openedVault.Close() }()
 
-	recipient, err := openedVault.Recipient()
+	recipient, err := openedVault.Recipient(ctx)
 	if err != nil {
 		return nil, "", fmt.Errorf("read stored recipient: %w", err)
 	}
 
 	if len(names) > 0 {
-		entries, err := entriesByName(openedVault, names)
+		entries, err := entriesByName(ctx, openedVault, names)
 
 		return entries, recipient, err
 	}
 
-	entries, err := openedVault.Entries(vault.EntryFilter{Prefix: flags.prefix, EnvNamed: flags.env})
+	entries, err := openedVault.Entries(ctx, vault.EntryFilter{Prefix: flags.prefix, EnvNamed: flags.env})
 	if err != nil {
 		return nil, "", userHint(err)
 	}
@@ -168,11 +173,11 @@ func collectRevealEntries(opts *options, names []string, flags revealFlags) ([]v
 	return entries, recipient, nil
 }
 
-func entriesByName(openedVault *vault.Vault, names []string) ([]vault.Entry, error) {
+func entriesByName(ctx context.Context, openedVault *vault.Vault, names []string) ([]vault.Entry, error) {
 	entries := make([]vault.Entry, 0, len(names))
 
 	for _, name := range names {
-		resolved, err := openedVault.NewestEnabled(name)
+		resolved, err := openedVault.NewestEnabled(ctx, name)
 		if err != nil {
 			return nil, userHint(err)
 		}

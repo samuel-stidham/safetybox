@@ -3,8 +3,8 @@ package cmd
 import (
 	"time"
 
-	"github.com/samuel-stidham/safetybox/internal/secret"
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/secret"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"github.com/spf13/cobra"
 )

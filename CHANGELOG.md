@@ -12,7 +12,9 @@ changes alter observable behavior, so this is a major version. The
 breaking changes are `exec` exit codes for signal deaths, the
 `reveal --json` shape for binary values, the meaning of an empty
 `--expires`, and a new refusal when the vault recipient does not
-match the identity.
+match the identity. The module path also moves to
+`github.com/samuel-stidham/safetybox/v2`, which Go requires for a v2
+release.
 
 ### Added
 
@@ -24,9 +26,9 @@ match the identity.
   is not valid UTF-8 is now base64-encoded and marked with an
   `encoding` field, so a consumer recovers the exact bytes. Before, the
   invalid bytes were replaced with U+FFFD.
-- A vulnerability scan in the toolchain. `make vuln` runs govulncheck,
-  the CI test step runs under the race detector, and CI gained a
-  govulncheck step.
+- A vulnerability scan in the toolchain. `make vuln` runs a pinned
+  govulncheck, the CI test step runs under the race detector, and CI
+  gained a govulncheck step.
 - A full tutorial and a documentation index under `docs/`. The tutorial
   runs every command in order and covers moving a vault between
   machines.
@@ -52,6 +54,14 @@ match the identity.
 - A signal now wipes the identity enclave. `main` installs a memguard
   interrupt handler and routes fatal exits through `SafeExit`, so a
   Ctrl-C during a decrypt scrubs the key before the process exits.
+- The value and passphrase readers and the envelope decrypt path wipe
+  each buffer they outgrow, and a failed read wipes its partial buffer
+  and returns nothing. The interactive prompt still reads through
+  `x/term`, which grows without wiping. That gap is on the roadmap.
+- rekey and passwd now hold an exclusive lock beside the identity file
+  for their whole run. Two interleaved rekeys could delete each other's
+  staged key and leave the vault sealed to a key that no longer exists
+  anywhere. The second run now refuses up front instead.
 
 ### Fixed
 
@@ -75,6 +85,17 @@ match the identity.
 - The loose-permission warning now says group or world can access the
   vault, rather than read it. The check flags any group or world bit,
   not only read.
+- The module installs at v2. The path now carries the `/v2` suffix that
+  Go's semantic import versioning requires. So `go install` and the
+  module proxy accept the v2.0.0 tag.
+- rekey re-encrypts one version at a time instead of holding every
+  envelope in memory at once. This bounds its memory use on a large
+  vault.
+- CI bumps `actions/setup-go` to v7, moving that step off the deprecated
+  Node 20 runtime onto Node 24.
+- The vault's exported methods now accept a `context.Context` from the
+  caller instead of building their own. This is an internal refactor with
+  no behavior change.
 
 ## [1.2.0] - 2026-07-12
 
