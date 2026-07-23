@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/samuel-stidham/safetybox/internal/envelope"
-	"github.com/samuel-stidham/safetybox/internal/identity"
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v2/internal/identity"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 )
 
 // ErrRecipientMismatch means the vault's stored recipient does not

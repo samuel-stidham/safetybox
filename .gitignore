@@ -48,3 +48,7 @@ artifacts/
 .AppleDouble
 .LSOverride
 ._*
+
+# Adversarial Review Files
+REVIEW*.md
+review*.md

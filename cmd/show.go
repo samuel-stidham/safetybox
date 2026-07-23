@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"github.com/spf13/cobra"
 )
@@ -29,14 +29,16 @@ func newShowCmd(opts *options) *cobra.Command {
 }
 
 func runShow(cobraCmd *cobra.Command, opts *options, name string) error {
-	openedVault, err := opts.openVault()
+	ctx := cobraCmd.Context()
+
+	openedVault, err := opts.openVault(ctx)
 	if err != nil {
 		return err
 	}
 
 	defer func() { _ = openedVault.Close() }()
 
-	meta, versions, err := openedVault.Meta(name)
+	meta, versions, err := openedVault.Meta(ctx, name)
 	if err != nil {
 		return userHint(err)
 	}

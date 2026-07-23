@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"github.com/spf13/cobra"
 )
@@ -37,14 +37,16 @@ func newDisableCmd(opts *options) *cobra.Command {
 }
 
 func runDisable(cobraCmd *cobra.Command, opts *options, name string, number int64) error {
-	openedVault, err := opts.openVault()
+	ctx := cobraCmd.Context()
+
+	openedVault, err := opts.openVault(ctx)
 	if err != nil {
 		return err
 	}
 
 	defer func() { _ = openedVault.Close() }()
 
-	if err := openedVault.Disable(name, number); err != nil {
+	if err := openedVault.Disable(ctx, name, number); err != nil {
 		return userHint(err)
 	}
 

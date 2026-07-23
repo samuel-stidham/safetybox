@@ -2,13 +2,18 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/samuel-stidham/safetybox/v2/internal/identity"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -127,7 +132,7 @@ func swapVaultRecipient(t *testing.T, vaultPath, recipient string) {
 
 	defer func() { require.NoError(t, handle.Close()) }()
 
-	_, err = handle.ExecContext(context.Background(),
+	_, err = handle.ExecContext(t.Context(),
 		"UPDATE vault_meta SET value = ? WHERE key = 'recipient'", recipient)
 	require.NoError(t, err)
 }
@@ -171,6 +176,29 @@ func TestSetClearsExpiry(t *testing.T) {
 	assert.Nil(t, decode(t, stdout)["expiresAt"], "empty --expires must clear the expiry")
 }
 
+// TestSetClearsEnvName covers B-08: an explicit empty --env-name removes
+// the env name, so exec stops injecting the variable. This is a
+// different code path from the expiry clearing, guarded separately.
+func TestSetClearsEnvName(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fixture.runOK(fakeValueOne+"\n", "set", "env/clear", "--env-name", "FAKE_CLEARABLE")
+
+	stdout, _ := fixture.runOK("", "show", "env/clear")
+	require.Equal(t, "FAKE_CLEARABLE", decode(t, stdout)["envName"], "env name must be set first")
+
+	injected, _ := fixture.runOK("", "exec", "--", "sh", "-c", `printf '%s' "$FAKE_CLEARABLE"`)
+	require.Equal(t, fakeValueOne, injected, "exec must inject the env-named secret")
+
+	fixture.runOK(fakeValueTwo+"\n", "set", "env/clear", "--env-name", "")
+
+	stdout, _ = fixture.runOK("", "show", "env/clear")
+	assert.Nil(t, decode(t, stdout)["envName"], "empty --env-name must clear the env name")
+
+	after, _ := fixture.runOK("", "exec", "--", "sh", "-c", `printf '%s' "$FAKE_CLEARABLE"`)
+	assert.Empty(t, after, "a cleared env name must not inject")
+}
+
 // TestRevealJSONBase64EncodesNonUTF8 covers A-5: a value that is not
 // valid UTF-8 is base64-encoded and marked, so a consumer gets the
 // exact bytes back instead of U+FFFD substitutions.
@@ -204,4 +232,193 @@ func TestExecSignalDeathMapsToShellCode(t *testing.T) {
 
 	require.ErrorAs(t, err, &exit)
 	assert.Equal(t, 137, exit.code, "SIGKILL death must map to 128+9")
+}
+
+// TestRekeyRefusesWhileIdentityLockIsHeld pins the concurrent-rekey
+// guard: while one identity operation holds the lock, a second rekey
+// refuses up front instead of deleting the first one's staged key and
+// destroying the only key that reads the vault. passwd shares the same
+// lock, so one refusal test covers the serialization for both verbs.
+func TestRekeyRefusesWhileIdentityLockIsHeld(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	unlock, err := acquireIdentityLock(fixture.identityPath)
+	require.NoError(t, err)
+
+	t.Cleanup(unlock)
+
+	_, _, err = fixture.run("", "rekey")
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "another safetybox rekey or passwd is running")
+}
+
+// TestRekeyRunsAfterLockIsReleased pins that the lock is advisory and
+// transient: once the holder releases it, a rekey proceeds normally.
+func TestRekeyRunsAfterLockIsReleased(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	unlock, err := acquireIdentityLock(fixture.identityPath)
+	require.NoError(t, err)
+
+	unlock()
+
+	fixture.runOK("", "rekey")
+}
+
+// TestFailedRekeyKeepsStagedKeyOnAmbiguousCommit covers R-7: when the
+// rekey commit itself errors, the commit may still have landed in the
+// WAL, so the staged key must survive and the error must tell the user
+// to test which key opens the vault.
+func TestFailedRekeyKeepsStagedKeyOnAmbiguousCommit(t *testing.T) {
+	tmp := t.TempDir()
+	stagedPath := filepath.Join(tmp, "identity.age.new")
+
+	require.NoError(t, os.WriteFile(stagedPath, []byte("fake-staged-key-not-real"), 0o600))
+
+	failure := fmt.Errorf("commit rekey: %w", vault.ErrCommitAmbiguous)
+
+	err := cleanUpFailedRekey(failure, filepath.Join(tmp, "identity.age"), stagedPath)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "test which key opens the vault")
+	assert.FileExists(t, stagedPath, "an ambiguous commit must not delete the staged key")
+}
+
+// TestFailedRekeyRemovesStagedKeyOnPreCommitError pins the other half:
+// a failure before the commit leaves the vault unchanged, so the
+// staged key is removed to keep a retry clean.
+func TestFailedRekeyRemovesStagedKeyOnPreCommitError(t *testing.T) {
+	tmp := t.TempDir()
+	stagedPath := filepath.Join(tmp, "identity.age.new")
+
+	require.NoError(t, os.WriteFile(stagedPath, []byte("fake-staged-key-not-real"), 0o600))
+
+	err := cleanUpFailedRekey(errors.New("reseal failed"), filepath.Join(tmp, "identity.age"), stagedPath)
+
+	require.Error(t, err)
+	assert.NoFileExists(t, stagedPath, "a pre-commit failure must remove the staged key")
+}
+
+// TestPromoteStagedIdentityToleratesCompletedHeal covers A-4 and B-06:
+// a read verb's heal can promote the staged key between the swap's two
+// renames. A missing staged file with the identity already in place is
+// that heal having finished the swap, not a failure.
+func TestPromoteStagedIdentityToleratesCompletedHeal(t *testing.T) {
+	t.Run("renames the staged key into place", func(t *testing.T) {
+		tmp := t.TempDir()
+		staged := filepath.Join(tmp, "identity.age.new")
+		target := filepath.Join(tmp, "identity.age")
+
+		require.NoError(t, os.WriteFile(staged, []byte("fake-staged-key-not-real"), 0o600))
+
+		require.NoError(t, promoteStagedIdentity(staged, target))
+		assert.FileExists(t, target)
+		assert.NoFileExists(t, staged)
+	})
+
+	t.Run("tolerates a heal that already promoted the key", func(t *testing.T) {
+		tmp := t.TempDir()
+		staged := filepath.Join(tmp, "identity.age.new")
+		target := filepath.Join(tmp, "identity.age")
+
+		require.NoError(t, os.WriteFile(target, []byte("fake-key-not-real"), 0o600))
+
+		assert.NoError(t, promoteStagedIdentity(staged, target))
+		assert.FileExists(t, target)
+	})
+
+	t.Run("fails when neither staged nor identity exists", func(t *testing.T) {
+		tmp := t.TempDir()
+		staged := filepath.Join(tmp, "identity.age.new")
+		target := filepath.Join(tmp, "identity.age")
+
+		require.Error(t, promoteStagedIdentity(staged, target))
+	})
+}
+
+// TestAcquireIdentityLockMissingDirHintsInit covers B-04: the lock is
+// taken before the identity load, so a first-run passwd or rekey with
+// no config directory must still surface the init hint, not a raw
+// error about a missing lock file.
+func TestAcquireIdentityLockMissingDirHintsInit(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "nodir", "identity.age")
+
+	_, err := acquireIdentityLock(missing)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, identity.ErrNotFound)
+}
+
+// TestIdentityLockPathResolvesSymlink covers A-3: a symlink alias of the
+// identity must derive the same lock path as the real file, so two
+// spellings serialize against each other instead of taking two locks.
+func TestIdentityLockPathResolvesSymlink(t *testing.T) {
+	tmp := t.TempDir()
+	realPath := filepath.Join(tmp, "identity.age")
+
+	require.NoError(t, os.WriteFile(realPath, []byte("fake-key-not-real"), 0o600))
+
+	alias := filepath.Join(tmp, "alias.age")
+	require.NoError(t, os.Symlink(realPath, alias))
+
+	assert.Equal(t, identityLockPath(realPath), identityLockPath(alias),
+		"a symlink alias must derive the same lock path as the real identity")
+}
+
+// pipeWithInput returns the read end of a pipe holding input. Closing
+// the write end models the terminal reaching end of input.
+func pipeWithInput(t *testing.T, input string) *os.File {
+	t.Helper()
+
+	readEnd, writeEnd, err := os.Pipe()
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = readEnd.Close() })
+
+	_, err = writeEnd.WriteString(input)
+	require.NoError(t, err)
+	require.NoError(t, writeEnd.Close())
+
+	return readEnd
+}
+
+// TestReadLineWipingStopsAtNewline pins that the prompt line reader
+// returns exactly the typed line, without its newline, and never
+// consumes input past it.
+func TestReadLineWipingStopsAtNewline(t *testing.T) {
+	readEnd := pipeWithInput(t, "fake-typed-passphrase-not-real\nnext")
+
+	line, err := readLineWiping(int(readEnd.Fd()))
+
+	require.NoError(t, err)
+	assert.Equal(t, []byte("fake-typed-passphrase-not-real"), line)
+
+	rest, err := io.ReadAll(readEnd)
+	require.NoError(t, err)
+	assert.Equal(t, "next", string(rest), "input after the newline must stay unread")
+}
+
+// TestReadLineWipingReturnsDataAtEndOfInput pins that input ending
+// without a newline still yields the line, matching term.ReadPassword.
+func TestReadLineWipingReturnsDataAtEndOfInput(t *testing.T) {
+	readEnd := pipeWithInput(t, "fake-typed-passphrase-not-real")
+
+	line, err := readLineWiping(int(readEnd.Fd()))
+
+	require.NoError(t, err)
+	assert.Equal(t, []byte("fake-typed-passphrase-not-real"), line)
+}
+
+// TestReadLineWipingSurvivesGrowth pins content fidelity for a line
+// longer than the reader's initial buffer, so the wiping of outgrown
+// buffers never corrupts a long passphrase.
+func TestReadLineWipingSurvivesGrowth(t *testing.T) {
+	long := strings.Repeat("x", 700)
+	readEnd := pipeWithInput(t, long+"\n")
+
+	line, err := readLineWiping(int(readEnd.Fd()))
+
+	require.NoError(t, err)
+	assert.Equal(t, []byte(long), line)
 }

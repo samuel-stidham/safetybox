@@ -6,13 +6,17 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [2.0.0] - 2026-07-22
 
-A security-review release. An adversarial two-reviewer pass found
-seventeen issues, and this release fixes the code-level ones. Four
+A security-review release. Several adversarial two-reviewer passes
+hardened it. The first found seventeen issues, and later passes over
+the v2 changes and the whole release found more. This release fixes
+every code-level finding and records the rest on the roadmap. Four
 changes alter observable behavior, so this is a major version. The
 breaking changes are `exec` exit codes for signal deaths, the
 `reveal --json` shape for binary values, the meaning of an empty
 `--expires`, and a new refusal when the vault recipient does not
-match the identity.
+match the identity. The module path also moves to
+`github.com/samuel-stidham/safetybox/v2`, which Go requires for a v2
+release.
 
 ### Added
 
@@ -24,14 +28,34 @@ match the identity.
   is not valid UTF-8 is now base64-encoded and marked with an
   `encoding` field, so a consumer recovers the exact bytes. Before, the
   invalid bytes were replaced with U+FFFD.
-- A vulnerability scan in the toolchain. `make vuln` runs govulncheck,
-  the CI test step runs under the race detector, and CI gained a
-  govulncheck step.
+- A vulnerability scan in the toolchain. `make vuln` runs a pinned
+  govulncheck, the CI test step runs under the race detector, and CI
+  gained a govulncheck step.
 - A full tutorial and a documentation index under `docs/`. The tutorial
   runs every command in order and covers moving a vault between
   machines.
 - A roadmap under `docs/roadmap.md` that tracks the security items the
   review left open for a later release.
+
+### Changed
+
+- `make test` now runs the fast suite for the local loop, and
+  `make test-race` runs the same tests under the race detector with
+  cgo on. CI runs `make test-race`.
+- Lint suppressions moved out of the code. The two gosec G204
+  exceptions live in `.golangci.yml` as anchored per-file rules, each
+  justified in `docs/linting.md`, and no inline `nolint` comments
+  remain.
+- The documentation matches the shipped behavior. The security model,
+  command reference, tutorial, and configuration guide describe the
+  identity lock, the ambiguous-commit handling, and the wiping
+  readers. The security model also documents that a vault-write
+  attacker can forge a secret's value, which the roadmap's
+  authenticated-contents item will address. The command reference
+  scopes the recipient guard to the verbs that read the vault, so
+  passwd no longer appears under it. The configuration guide documents
+  the identity file's `.bak`, `.new`, and `.lock` siblings. The README
+  and the security model drop their 1.0-era status text.
 
 ### Security
 
@@ -52,6 +76,29 @@ match the identity.
 - A signal now wipes the identity enclave. `main` installs a memguard
   interrupt handler and routes fatal exits through `SafeExit`, so a
   Ctrl-C during a decrypt scrubs the key before the process exits.
+- Every reader that touches secret material wipes each buffer it
+  outgrows: the value and passphrase readers, the envelope decrypt
+  path, the identity loader, and the interactive prompt, which now
+  uses its own no-echo reader instead of `term.ReadPassword`, whose
+  line buffer grows without wiping. A failed read wipes its partial
+  buffer, including any reader scratch space, and returns nothing. Only
+  a bare `io.EOF` counts as end of input, so a wrapped EOF can never
+  pass truncated data off as a successful read.
+- The interactive prompt restores the terminal on a signal. A Ctrl-C
+  during a passphrase entry used to leave the shell with echo disabled,
+  because the interrupt handler exited before the deferred restore ran.
+- The identity lock resolves symlinks before deriving its path, so two
+  spellings of one identity, such as a symlink alias, serialize against
+  each other instead of taking two independent locks.
+- rekey and passwd now hold an exclusive lock beside the identity file
+  for their whole run. Two interleaved rekeys could delete each other's
+  staged key and leave the vault sealed to a key that no longer exists
+  anywhere. The second run now refuses up front instead.
+- A rekey whose commit errors keeps its staged identity. SQLite can
+  report a commit error after the commit became durable in the WAL,
+  and deleting the staged key then would destroy the only key able to
+  read the re-encrypted vault. The error now says to test which key
+  opens the vault before deleting either.
 
 ### Fixed
 
@@ -75,6 +122,33 @@ match the identity.
 - The loose-permission warning now says group or world can access the
   vault, rather than read it. The check flags any group or world bit,
   not only read.
+- The module installs at v2. The path now carries the `/v2` suffix that
+  Go's semantic import versioning requires. So `go install` and the
+  module proxy accept the v2.0.0 tag. The Makefile `PKG` variable, the
+  gci import prefix, and the install commands in the README and the
+  tutorial carry the suffix too.
+- rekey re-encrypts one version at a time instead of holding every
+  envelope in memory at once, and prepares its per-version fetch once
+  rather than re-parsing it each iteration. This bounds its memory use
+  on a large vault.
+- CI bumps `actions/setup-go` to v7, moving that step off the deprecated
+  Node 20 runtime onto Node 24.
+- The vault's exported methods now accept a `context.Context` from the
+  caller instead of building their own. This is an internal refactor with
+  no behavior change.
+- The identity lock reports a filesystem without `flock` support as an
+  environment error, instead of claiming another rekey or passwd is
+  running. Only a genuine `EWOULDBLOCK` reports contention.
+- The no-echo prompt builds on the whole BSD family, not darwin alone.
+  The termios constants live in a build-tagged file covering darwin,
+  dragonfly, freebsd, netbsd, and openbsd. CI now cross-compiles for
+  darwin, so a platform-specific build break surfaces before release.
+- rekey no longer reports a false failure when a concurrent read verb
+  heals the identity swap. A missing staged key with the identity
+  already in place is treated as the swap having completed.
+- passwd and rekey on a machine with no config directory now point at
+  `safetybox init`, instead of reporting a raw error about a missing
+  lock file.
 
 ## [1.2.0] - 2026-07-12
 

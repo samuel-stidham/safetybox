@@ -7,10 +7,12 @@ is no server, no GUI, and no unencrypted storage.
 
 ## Status
 
-safetybox is in early development. Every verb works end to end: init,
-set, get, reveal, show, list, stale, disable, delete, purge, exec,
-passwd, and rekey. The format may still change before 1.0, so keep
-backups and do not make it your only copy of anything yet.
+safetybox 2.0 is the current major release. Every verb works end to
+end: init, set, get, reveal, show, list, stale, disable, delete,
+purge, exec, passwd, and rekey. The 2.0 release followed an
+adversarial security review, and the one remaining item lives on the
+[roadmap](docs/roadmap.md). Keep an offsite backup of the identity
+file, because no passphrase can recover the vault without it.
 
 ## How it works
 
@@ -31,7 +33,7 @@ own address, and decryption fails if the ciphertext was moved or swapped.
 Install the latest tagged release with Go 1.26 or later.
 
 ```sh
-go install github.com/samuel-stidham/safetybox@latest
+go install github.com/samuel-stidham/safetybox/v2@latest
 ```
 
 Or build from source.

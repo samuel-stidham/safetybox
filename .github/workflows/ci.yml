@@ -21,12 +21,18 @@ jobs:
           # make build derives the version from git describe.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
 
       - name: Build
         run: make build
+
+      # The runner is linux, so the darwin-only termios constants in the
+      # no-echo prompt are otherwise first compiled at release time.
+      # Cross-compile for darwin here so a build break surfaces in CI.
+      - name: Cross-compile for darwin
+        run: GOOS=darwin go build ./...
 
       - name: Install lint tools
         run: |
@@ -42,7 +48,7 @@ jobs:
       - name: Test
         # The race detector needs cgo, so this step overrides the
         # job-wide CGO_ENABLED=0 that the shipped binary is built with.
-        run: make test
+        run: make test-race
         env:
           CGO_ENABLED: "1"
 
@@ -103,7 +109,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || needs.tag.outputs.new_tag }}
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
 

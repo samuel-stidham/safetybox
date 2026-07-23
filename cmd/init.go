@@ -2,15 +2,16 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 
-	"github.com/samuel-stidham/safetybox/internal/envelope"
-	"github.com/samuel-stidham/safetybox/internal/identity"
-	"github.com/samuel-stidham/safetybox/internal/secret"
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v2/internal/identity"
+	"github.com/samuel-stidham/safetybox/v2/internal/secret"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -32,6 +33,8 @@ func newInitCmd(opts *options) *cobra.Command {
 }
 
 func runInit(cobraCmd *cobra.Command, opts *options) error {
+	ctx := cobraCmd.Context()
+
 	identityPath, err := opts.resolveIdentityPath()
 	if err != nil {
 		return err
@@ -66,7 +69,7 @@ func runInit(cobraCmd *cobra.Command, opts *options) error {
 		return userHint(err)
 	}
 
-	if err := vault.Create(vaultPath, key.Recipient().String()); err != nil {
+	if err := vault.Create(ctx, vaultPath, key.Recipient().String()); err != nil {
 		// The identity was written this invocation and guards
 		// nothing yet, so remove it to keep init retryable.
 		_ = os.Remove(identityPath)
@@ -74,7 +77,7 @@ func runInit(cobraCmd *cobra.Command, opts *options) error {
 		return userHint(fmt.Errorf("create vault: %w", err))
 	}
 
-	if err := selfTest(vaultPath, key); err != nil {
+	if err := selfTest(ctx, vaultPath, key); err != nil {
 		// Both files were created this invocation and guard nothing,
 		// so remove them rather than wedge a re-run on ErrExists.
 		_ = os.Remove(identityPath)
@@ -91,15 +94,15 @@ func runInit(cobraCmd *cobra.Command, opts *options) error {
 
 // selfTest seals and opens one throwaway value through the full
 // stack: vault recipient read-back, envelope seal, envelope open.
-func selfTest(vaultPath string, key *age.X25519Identity) error {
-	openedVault, err := vault.Open(vaultPath)
+func selfTest(ctx context.Context, vaultPath string, key *age.X25519Identity) error {
+	openedVault, err := vault.Open(ctx, vaultPath)
 	if err != nil {
 		return fmt.Errorf("open new vault: %w", err)
 	}
 
 	defer func() { _ = openedVault.Close() }()
 
-	recipient, err := storedRecipient(openedVault)
+	recipient, err := storedRecipient(ctx, openedVault)
 	if err != nil {
 		return err
 	}

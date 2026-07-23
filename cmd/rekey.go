@@ -1,15 +1,16 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 
-	"github.com/samuel-stidham/safetybox/internal/envelope"
-	"github.com/samuel-stidham/safetybox/internal/identity"
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v2/internal/identity"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -42,6 +43,17 @@ func runRekey(cobraCmd *cobra.Command, opts *options) error {
 		return err
 	}
 
+	// Serialize against other identity-rewriting runs BEFORE the heal
+	// and the load. Without this, a second rekey deletes this run's
+	// staged key mid-reseal and the vault commits to a key that no
+	// longer exists anywhere on disk.
+	unlock, err := acquireIdentityLock(identityPath)
+	if err != nil {
+		return userHint(err)
+	}
+
+	defer unlock()
+
 	// Heal a prior rekey that crashed mid-swap before doing anything
 	// else, so the load below sees a real identity file.
 	if err := completeInterruptedRekey(identityPath); err != nil {
@@ -64,44 +76,79 @@ func runRekey(cobraCmd *cobra.Command, opts *options) error {
 
 	stagedPath := identityPath + ".new"
 
+	ctx := cobraCmd.Context()
+
 	// Refuse to touch anything unless the vault is really encrypted to
 	// the loaded identity. A previous rekey that committed the vault
 	// but crashed before the identity swap leaves the OLD key at
 	// identityPath, loading cleanly, while the only key that can read
 	// the vault sits at the staged sibling. Deleting that staged file
 	// as "stale" would destroy every secret forever.
-	if err := ensureVaultOnIdentity(opts, oldKey, identityPath, stagedPath); err != nil {
+	if err := ensureVaultOnIdentity(ctx, opts, oldKey, identityPath, stagedPath); err != nil {
 		return err
 	}
 
+	output, err := rotateToNewKey(cobraCmd, opts, oldKey, identityPath, stagedPath, passphrase)
+	if err != nil {
+		return err
+	}
+
+	return printJSON(cobraCmd, opts, *output)
+}
+
+// rotateToNewKey generates the replacement identity, stages it, rekeys
+// the vault, and swaps the identity files. It runs under the identity
+// lock, with the vault already verified to be on oldKey.
+func rotateToNewKey(
+	cobraCmd *cobra.Command, opts *options, oldKey *age.X25519Identity,
+	identityPath, stagedPath string, passphrase []byte,
+) (*rekeyOutput, error) {
 	newKey, err := age.GenerateX25519Identity()
 	if err != nil {
-		return fmt.Errorf("generate new identity: %w", err)
+		return nil, fmt.Errorf("generate new identity: %w", err)
 	}
 
 	// The new identity is written beside the old one BEFORE the vault
 	// transaction, so a crash can never leave re-encrypted envelopes
 	// without their key on disk.
 	if err := stageNewIdentity(stagedPath, newKey, passphrase); err != nil {
-		return err
+		return nil, err
 	}
 
 	count, err := rekeyVault(cobraCmd, opts, oldKey, newKey)
 	if err != nil {
-		_ = os.Remove(stagedPath)
-
-		return err
+		return nil, cleanUpFailedRekey(err, identityPath, stagedPath)
 	}
 
 	if err := swapIdentityFiles(identityPath, stagedPath); err != nil {
-		return err
+		return nil, err
 	}
 
-	return printJSON(cobraCmd, opts, rekeyOutput{
+	return &rekeyOutput{
 		Recipient:       newKey.Recipient().String(),
 		RekeyedVersions: count,
 		BackupIdentity:  identityPath + ".bak",
-	})
+	}, nil
+}
+
+// cleanUpFailedRekey decides what a failed rekey leaves on disk. A
+// pre-commit failure leaves the vault unchanged, so the staged key is
+// removed to keep a retry clean. A commit that errored may still have
+// landed durably in the WAL. In that case the staged key may be the
+// only key able to read the vault, so it survives and the error tells
+// the user to test which key opens the vault before deleting either.
+func cleanUpFailedRekey(err error, identityPath, stagedPath string) error {
+	if errors.Is(err, vault.ErrCommitAmbiguous) {
+		return fmt.Errorf(
+			"%w: the vault may or may not be rekeyed: keep both %s and %s, "+
+				"and test which key opens the vault before deleting either",
+			err, identityPath, stagedPath,
+		)
+	}
+
+	_ = os.Remove(stagedPath)
+
+	return err
 }
 
 // ensureVaultOnIdentity verifies the vault's stored recipient matches
@@ -110,13 +157,15 @@ func runRekey(cobraCmd *cobra.Command, opts *options) error {
 // the vault is on that key: a rekey that committed the vault and then
 // crashed before the swap leaves the old key in place and the live
 // key at the staged sibling.
-func ensureVaultOnIdentity(opts *options, oldKey *age.X25519Identity, identityPath, stagedPath string) error {
-	openedVault, err := opts.openVault()
+func ensureVaultOnIdentity(
+	ctx context.Context, opts *options, oldKey *age.X25519Identity, identityPath, stagedPath string,
+) error {
+	openedVault, err := opts.openVault(ctx)
 	if err != nil {
 		return err
 	}
 
-	stored, err := openedVault.Recipient()
+	stored, err := openedVault.Recipient(ctx)
 
 	_ = openedVault.Close()
 
@@ -166,14 +215,16 @@ func stageNewIdentity(stagedPath string, newKey *age.X25519Identity, passphrase 
 }
 
 func rekeyVault(cobraCmd *cobra.Command, opts *options, oldKey, newKey *age.X25519Identity) (int64, error) {
-	openedVault, err := opts.openVault()
+	ctx := cobraCmd.Context()
+
+	openedVault, err := opts.openVault(ctx)
 	if err != nil {
 		return 0, err
 	}
 
 	defer func() { _ = openedVault.Close() }()
 
-	count, err := openedVault.Rekey(newKey.Recipient().String(),
+	count, err := openedVault.Rekey(ctx, newKey.Recipient().String(),
 		func(name string, number int64, blob []byte) ([]byte, error) {
 			address := vault.CanonicalAddress(name, number)
 
@@ -213,7 +264,7 @@ func swapIdentityFiles(identityPath, stagedPath string) error {
 		return fmt.Errorf("vault rekeyed but identity swap failed, your NEW identity is at %s: %w", stagedPath, err)
 	}
 
-	if err := os.Rename(stagedPath, identityPath); err != nil {
+	if err := promoteStagedIdentity(stagedPath, identityPath); err != nil {
 		return fmt.Errorf("vault rekeyed but identity swap failed, your NEW identity is at %s: %w", stagedPath, err)
 	}
 
@@ -226,4 +277,28 @@ func swapIdentityFiles(identityPath, stagedPath string) error {
 	}
 
 	return nil
+}
+
+// promoteStagedIdentity renames the staged key into place. Read verbs
+// heal a missing identity by promoting the staged key without taking
+// the identity lock, so one can win this rename between the swap's two
+// steps. When that happens the staged file is gone and the identity is
+// already in place, so a missing staged file with the identity present
+// is the heal having finished the swap, not a failure.
+func promoteStagedIdentity(stagedPath, identityPath string) error {
+	err := os.Rename(stagedPath, identityPath)
+	if err == nil {
+		return nil
+	}
+
+	// ENOENT with the identity already in place means a concurrent
+	// reader heal promoted the staged key between the swap's two
+	// renames. That completed the swap, so it is not a failure.
+	if errors.Is(err, fs.ErrNotExist) {
+		if _, statErr := os.Stat(identityPath); statErr == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("promote staged identity: %w", err)
 }

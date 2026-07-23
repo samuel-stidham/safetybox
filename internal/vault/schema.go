@@ -3,9 +3,10 @@ package vault
 // schemaV1 is the initial schema.
 //
 // Name visibility: secret.name is a plaintext column so list, stale,
-// and prefix queries stay cheap. This is the open decision recorded
-// in CLAUDE.md. Names may move inside the encryption boundary before
-// 1.0.
+// and prefix queries stay cheap. This is a recorded design decision,
+// documented in docs/security.md. Moving names inside the encryption
+// boundary would change the on-disk format, so it can arrive only with
+// a major release.
 const schemaV1 = `
 CREATE TABLE vault_meta (
     key   TEXT PRIMARY KEY,

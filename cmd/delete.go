@@ -18,14 +18,16 @@ func newDeleteCmd(opts *options) *cobra.Command {
 }
 
 func runDelete(cobraCmd *cobra.Command, opts *options, name string) error {
-	openedVault, err := opts.openVault()
+	ctx := cobraCmd.Context()
+
+	openedVault, err := opts.openVault(ctx)
 	if err != nil {
 		return err
 	}
 
 	defer func() { _ = openedVault.Close() }()
 
-	if err := openedVault.SoftDelete(name); err != nil {
+	if err := openedVault.SoftDelete(ctx, name); err != nil {
 		return userHint(err)
 	}
 

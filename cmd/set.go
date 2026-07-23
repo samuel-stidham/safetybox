@@ -4,13 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"time"
 
-	"github.com/samuel-stidham/safetybox/internal/envelope"
-	"github.com/samuel-stidham/safetybox/internal/secret"
-	"github.com/samuel-stidham/safetybox/internal/vault"
+	"github.com/samuel-stidham/safetybox/v2/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v2/internal/secret"
+	"github.com/samuel-stidham/safetybox/v2/internal/vault"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -69,19 +68,21 @@ func runSet(cobraCmd *cobra.Command, opts *options, name string, flags setFlags)
 
 	defer zeroBytes(value)
 
-	openedVault, err := opts.openVault()
+	ctx := cobraCmd.Context()
+
+	openedVault, err := opts.openVault(ctx)
 	if err != nil {
 		return err
 	}
 
 	defer func() { _ = openedVault.Close() }()
 
-	recipient, err := storedRecipient(openedVault)
+	recipient, err := storedRecipient(ctx, openedVault)
 	if err != nil {
 		return err
 	}
 
-	result, err := openedVault.AppendVersion(name, setOpts, func(address string) ([]byte, error) {
+	result, err := openedVault.AppendVersion(ctx, name, setOpts, func(address string) ([]byte, error) {
 		plaintext := secret.New(value)
 		defer plaintext.Destroy()
 
@@ -149,7 +150,7 @@ func readSecretValue(cobraCmd *cobra.Command, name string) ([]byte, error) {
 		return promptOnce(cobraCmd, fmt.Sprintf("Value for %s: ", name), "value")
 	}
 
-	content, err := io.ReadAll(cobraCmd.InOrStdin())
+	content, err := secret.ReadAllWiping(cobraCmd.InOrStdin())
 	if err != nil {
 		return nil, fmt.Errorf("read value from stdin: %w", err)
 	}

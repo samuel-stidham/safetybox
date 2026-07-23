@@ -18,14 +18,16 @@ func newStaleCmd(opts *options) *cobra.Command {
 }
 
 func runStale(cobraCmd *cobra.Command, opts *options) error {
-	openedVault, err := opts.openVault()
+	ctx := cobraCmd.Context()
+
+	openedVault, err := opts.openVault(ctx)
 	if err != nil {
 		return err
 	}
 
 	defer func() { _ = openedVault.Close() }()
 
-	summaries, err := openedVault.Stale(nowUTC())
+	summaries, err := openedVault.Stale(ctx, nowUTC())
 	if err != nil {
 		return userHint(err)
 	}

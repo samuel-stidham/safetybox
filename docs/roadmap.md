@@ -1,75 +1,71 @@
 # Roadmap
 
-Work planned for after 2.0.0. Each item traces to a finding from the
-security review that shipped in 2.0.0. The review fixed the rest. These
-are the pieces left open, with why each was deferred and a rough
-approach.
+Work planned for after 2.0.0. The 2.0.0 review left several items open.
+The low-priority ones are now done: rekey streams its envelopes, every
+secret reader wipes the buffers it outgrows, including the interactive
+prompt and the identity loader, the vault methods take a caller
+context, and the minor comment and warning notes are resolved. The
+size bound those items also proposed was judged unnecessary for a
+single-user CLI and deliberately dropped, so the reads stay unbounded.
+Two items remain. One carries real security weight and needs a format
+change. The other is a testing gap left open when the no-echo prompt
+shipped.
 
-## Authenticated vault metadata
+## Authenticated vault contents
 
 Priority: high. Touches the on-disk format.
 
 The 2.0.0 release added a recipient check. Every read verb compares the
 vault's stored recipient to the loaded identity and refuses on a
 mismatch. A swapped recipient is caught on the next read. The check does
-not reach the rest of the metadata. An attacker with write access to the
-vault can still alter `env_name`, `expires_at`, or a version's state,
-and nothing detects it.
+not reach the rest of the vault. An attacker with write access can still
+alter `env_name`, `expires_at`, or a version's state, and nothing
+detects it.
 
-The fix is an authenticated structure over the metadata, so any
-tampering fails a check on read. That changes the on-disk format, so it
-needs a format bump and a migration. This is the one deferred item with
-real security weight. It belongs in its own release.
+The same gap covers a secret's value. The recipient is a public key, so
+a write attacker can seal a chosen plaintext to it with the correct
+address and overwrite a row. The forged value passes the address binding
+and the recipient check. Authenticating a value needs a signing secret
+at write time, which the asymmetric write model deliberately lacks, so
+closing this without giving every producer machine a signing key is the
+open design tension.
 
-## Stream rekey to bound its memory
+The fix is an authenticated structure over the metadata and the
+value-to-row binding, so any tampering fails a check on read. That
+changes the on-disk format, so it needs a format bump and a migration.
+This is the one deferred item with real security weight. It belongs in
+its own release.
 
-Priority: low.
+## Terminal behavior test for the passphrase prompt
 
-`rekey` collects every live envelope into one slice before the reseal
-loop, so all of a vault's ciphertext is resident at once. This is a
-memory and scalability concern for a very large vault, not a secrecy
-one, because the loaded envelopes are ciphertext.
+Priority: low. A testing gap, no security impact.
 
-Each decrypted plaintext is already wiped the moment its version is
-resealed, through the per-version `Destroy` call in the reseal callback.
-So the plaintext window is one secret at a time, not the whole vault.
-The remaining work is to stream the ciphertext rows rather than load
-them all, which matters only at scale.
+The interactive passphrase prompt reads through a custom no-echo reader
+in `cmd/noecho.go`, rather than `term.ReadPassword`. That reader
+disables terminal echo through a termios ioctl, reads the line one byte
+at a time into a buffer it wipes as it grows, maps a carriage return to
+a newline, and restores the terminal on return. It also restores the
+terminal from a signal handler, so a Ctrl-C at the prompt does not
+leave the shell with echo disabled.
 
-## Bound the secret and passphrase reads
+The tests exercise the reading loop through pipes. They prove the byte
+handling, the buffer wiping across its growth boundary, and the
+end-of-input behavior. None of them drive the full prompt against a
+real terminal. So nothing asserts that echo is actually off while the
+line is read, that the carriage-return mapping works, or that the
+terminal state returns to its original value after the read and after
+an interrupt. A wrong termios flag would echo a passphrase to the
+screen, and no test would catch it.
 
-Priority: low.
+Continuous integration compiles the platform-specific termios
+constants, both the Linux build and a macOS cross-build, so a build
+break surfaces before a release. The runtime behavior on a real
+terminal stays unverified.
 
-`set` and `--passphrase-file` read their input with `io.ReadAll`, which
-grows its buffer by reallocation. Each abandoned buffer holds a prefix
-of the secret and is never zeroed. The final buffer is wiped, but the
-intermediates are not.
-
-The fix is a bounded read into a pre-sized buffer instead of
-`io.ReadAll`, so no intermediate copy escapes. This is the same
-hardening scope as the rekey item.
-
-## Thread a caller context through the vault
-
-Priority: low. No security impact.
-
-Every exported vault method builds its own `context.Background()`.
-Cancellation relies on process death, which SQLite tolerates. This is a
-design smell, not a bug. The internal query plumbing already takes a
-context, so threading it through the exported methods is cheap.
-
-The fix is to accept a `context.Context` on the exported vault methods
-and pass the caller's down.
-
-## Minor cleanups
-
-Priority: low. No security or correctness impact.
-
-- The `nameGrammar` package variable in `internal/vault/types.go` repeats
-  the grammar that `ValidateName`'s comment already gives. Trim one, or
-  point the variable comment at the function.
-- `warnLooseVaultPerms` runs from `PersistentPreRun`, so it checks vault
-  permissions for every verb that runs, including ones that never open
-  the vault, like `passwd`. It is correct but warns where no vault read
-  happens. The `--version` flag short-circuits before the check, so it
-  is exempt.
+The fix is a test that runs the prompt against a pseudo-terminal and
+checks three things. The typed bytes never appear on the terminal. The
+returned line matches what was typed. The terminal state after the
+prompt equals the state before it. This needs a pseudo-terminal helper,
+either a small dependency or the `openpty` system calls wired up by
+hand. Adding a dependency during a security release was itself review
+surface, so the test was deferred to here.

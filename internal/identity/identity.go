@@ -21,6 +21,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/samuel-stidham/safetybox/v2/internal/secret"
+
 	"filippo.io/age"
 	"github.com/awnumar/memguard"
 )
@@ -107,7 +109,11 @@ func decrypt(sealed, passphrase []byte) (*age.X25519Identity, func(), error) {
 		return nil, nil, fmt.Errorf("%w: %w", ErrDecryptFailed, err)
 	}
 
-	plaintext, err := io.ReadAll(reader)
+	// ReadAllWiping zeroes each buffer it outgrows, so the decrypted
+	// key material leaves no unzeroed intermediate copies the way
+	// io.ReadAll's growth would. Today the key sits under the reader's
+	// initial capacity, and this keeps a larger future format safe too.
+	plaintext, err := secret.ReadAllWiping(reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", ErrDecryptFailed, err)
 	}

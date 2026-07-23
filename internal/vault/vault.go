@@ -42,7 +42,7 @@ type Vault struct {
 // Create makes a new vault at path with the given recipient. The
 // file is created 0600 with WAL journaling and schema v1. It fails
 // if path already exists.
-func Create(path, recipient string) error {
+func Create(ctx context.Context, path, recipient string) error {
 	path = filepath.Clean(path)
 
 	if _, err := os.Stat(path); err == nil {
@@ -66,14 +66,14 @@ func Create(path, recipient string) error {
 		return fmt.Errorf("create %s: %w", path, err)
 	}
 
-	handle, err := openHandle(path)
+	handle, err := openHandle(ctx, path)
 	if err != nil {
 		RemoveFiles(path)
 
 		return err
 	}
 
-	if err := initSchema(handle, recipient); err != nil {
+	if err := initSchema(ctx, handle, recipient); err != nil {
 		_ = handle.Close()
 
 		RemoveFiles(path)
@@ -89,7 +89,7 @@ func Create(path, recipient string) error {
 }
 
 // Open opens an existing vault and verifies its format version.
-func Open(path string) (*Vault, error) {
+func Open(ctx context.Context, path string) (*Vault, error) {
 	path = filepath.Clean(path)
 
 	if _, err := os.Stat(path); err != nil {
@@ -100,7 +100,7 @@ func Open(path string) (*Vault, error) {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 
-	handle, err := openHandle(path)
+	handle, err := openHandle(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +112,7 @@ func Open(path string) (*Vault, error) {
 	// operational error, such as a locked or unreadable database, which
 	// must not be reported as corrupt, because the recovery advice is to
 	// move the file aside.
-	hasMeta, err := vault.tableExists(metaTableName)
+	hasMeta, err := vault.tableExists(ctx, metaTableName)
 	if err != nil {
 		_ = handle.Close()
 
@@ -125,7 +125,7 @@ func Open(path string) (*Vault, error) {
 		return nil, fmt.Errorf("open %s: %w", path, ErrVaultCorrupt)
 	}
 
-	version, err := vault.metaValue(metaKeyFormatVersion)
+	version, err := vault.metaValue(ctx, metaKeyFormatVersion)
 	if err != nil {
 		_ = handle.Close()
 
@@ -163,8 +163,8 @@ func (v *Vault) Path() string {
 }
 
 // Recipient returns the stored recipient public key.
-func (v *Vault) Recipient() (string, error) {
-	recipient, err := v.metaValue(metaKeyRecipient)
+func (v *Vault) Recipient(ctx context.Context) (string, error) {
+	recipient, err := v.metaValue(ctx, metaKeyRecipient)
 	if err != nil {
 		return "", fmt.Errorf("read recipient: %w", err)
 	}
@@ -175,10 +175,10 @@ func (v *Vault) Recipient() (string, error) {
 // tableExists reports whether a table of the given name is present in
 // the schema. It separates a half-created vault, a missing table, from
 // an operational error hit while reading the database.
-func (v *Vault) tableExists(name string) (bool, error) {
+func (v *Vault) tableExists(ctx context.Context, name string) (bool, error) {
 	var found string
 
-	err := v.handle.QueryRowContext(context.Background(),
+	err := v.handle.QueryRowContext(ctx,
 		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&found)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
@@ -191,10 +191,10 @@ func (v *Vault) tableExists(name string) (bool, error) {
 	return true, nil
 }
 
-func (v *Vault) metaValue(key string) (string, error) {
+func (v *Vault) metaValue(ctx context.Context, key string) (string, error) {
 	var value string
 
-	row := v.handle.QueryRowContext(context.Background(), "SELECT value FROM vault_meta WHERE key = ?", key)
+	row := v.handle.QueryRowContext(ctx, "SELECT value FROM vault_meta WHERE key = ?", key)
 	if err := row.Scan(&value); err != nil {
 		return "", fmt.Errorf("vault_meta[%s]: %w", key, err)
 	}
@@ -202,7 +202,7 @@ func (v *Vault) metaValue(key string) (string, error) {
 	return value, nil
 }
 
-func openHandle(path string) (*sql.DB, error) {
+func openHandle(ctx context.Context, path string) (*sql.DB, error) {
 	// secure_delete(1) makes SQLite overwrite freed content with zeros
 	// instead of leaving it in freelist pages, so purge and rekey
 	// actually destroy old envelope bytes. _txlock=immediate starts
@@ -230,7 +230,7 @@ func openHandle(path string) (*sql.DB, error) {
 	// ErrCheckpointBlocked so the purge and rekey verbs can warn.
 	handle.SetMaxOpenConns(1)
 
-	if err := handle.PingContext(context.Background()); err != nil {
+	if err := handle.PingContext(ctx); err != nil {
 		_ = handle.Close()
 
 		return nil, fmt.Errorf("open database: %w", err)
@@ -241,9 +241,7 @@ func openHandle(path string) (*sql.DB, error) {
 
 // initSchema applies every migration and writes vault_meta inside a
 // single transaction.
-func initSchema(handle *sql.DB, recipient string) error {
-	ctx := context.Background()
-
+func initSchema(ctx context.Context, handle *sql.DB, recipient string) error {
 	txn, err := handle.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin schema transaction: %w", err)
