@@ -58,12 +58,17 @@ but their envelope column is NULL forever.
 
 Derived facts like expired are computed at read time, never stored.
 
-## Address binding
+## Address and metadata binding
 
-The canonical address of a version is `api/v1/<name>/<version>`.
-Seal prefixes the plaintext with it. Open verifies it against the
-row being read. The binding travels inside the ciphertext, so moving
-or swapping envelopes in the database breaks decryption.
+The envelope plaintext opens with a header. It carries a version tag,
+the canonical address `api/v1/<name>/<version>`, and the secret's env
+name and expiry as of the write. Seal writes the header, and Open
+verifies the address against the row and returns the bound env name and
+expiry. The read path compares those to the plaintext columns and
+refuses on a mismatch, so an edit to a column without the value is
+caught. The binding travels inside the ciphertext, so moving or
+swapping envelopes breaks decryption. See the
+[security model](security.md) for the limits.
 
 ## Resolution rules
 
@@ -81,11 +86,15 @@ recipient rather than preventing the write that follows one.
 
 ## Format version and migrations
 
-`vault_meta` records format_version, currently 1. Open refuses a
-vault written by a different format. Migrations are an ordered list
-where entry i upgrades format i to i+1, applied inside one
-transaction at create time. The scaffold is in place before any
-second format exists on purpose.
+`vault_meta` records format_version, currently 2. Open refuses a vault
+written by a different format. The SQL migrations are an ordered list
+applied at create time, and version 2 added none, because it changed
+the envelope frame, not the schema. Upgrading a version 1 vault is a
+re-seal, run by the `migrate` verb, which decrypts each old envelope
+and re-seals it into the version 2 frame. So format_version can exceed
+the number of SQL migrations. migrate holds the identity to decrypt, so
+it makes the same recipient check the read verbs do. It refuses a
+recipient-swapped vault before re-sealing.
 
 ## Error convention
 

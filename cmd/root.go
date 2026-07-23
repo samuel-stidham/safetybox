@@ -11,7 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/samuel-stidham/safetybox/v2/internal/logging"
+	"github.com/samuel-stidham/safetybox/v3/internal/logging"
 
 	"github.com/awnumar/memguard"
 	"github.com/spf13/cobra"
@@ -115,6 +115,7 @@ func newRootCmd(version string) *cobra.Command {
 		newPurgeCmd(opts),
 		newPasswdCmd(opts),
 		newRekeyCmd(opts),
+		newMigrateCmd(opts),
 	)
 
 	return root

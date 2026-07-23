@@ -37,9 +37,11 @@ CREATE INDEX secret_version_lookup
     ON secret_version (secret_id, state, version_number);
 `
 
-// migrations returns the ordered schema migrations. Migration i
-// upgrades a vault at format version i to i+1, so formatVersion
-// always equals len(migrations()).
+// migrations returns the ordered SQL schema migrations, applied in
+// order when a vault is created. Format version 2 changed the envelope
+// frame, not the SQL schema, so it added no migration here. So
+// formatVersion can exceed len(migrations()), and a version 1 to 2
+// upgrade is a re-seal at the cmd layer, not a SQL migration.
 func migrations() []string {
 	return []string{schemaV1}
 }

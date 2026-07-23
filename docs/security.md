@@ -34,32 +34,54 @@ through `--passphrase-file`, never through argv or environment
 variables. reveal is the single verb that prints plaintext, and exec
 places it only in the child process environment.
 
-## Address binding
+## Address and metadata binding
 
-Every envelope's plaintext is prefixed with its canonical address,
-`api/v1/<name>/<version>`. Decryption verifies the embedded address
-matches the row the ciphertext came from. An attacker with write
-access to the database cannot swap envelopes between rows without
-detection.
+Every envelope's plaintext starts with a header. It holds a version
+tag, the canonical address `api/v1/<name>/<version>`, and the secret's
+env name and expiry as of when the version was written. A read verifies
+the address against the row and returns the bound env name and expiry.
 
-The stored recipient is that attacker's other target. A write to
+The address binding stops an attacker moving an envelope between rows.
+The metadata binding, added in 3.0.0, catches an edit to the `env_name`
+or `expires_at` column. A read compares the column to the value sealed
+into the envelope and refuses on a mismatch. Re-sealing the envelope
+needs the plaintext value, which a vault-write attacker does not have.
+So they cannot make the column and the sealed value agree while keeping
+your value.
+
+The limit is inherent to keyless writes. The recipient is a public key,
+so an attacker can seal a chosen plaintext with a matching env name and
+expiry, then overwrite a row. That forged envelope passes every check.
+But it holds the attacker's value, not yours, so it is a substitution
+you would notice, not a stealthy metadata edit. Version state and
+soft-deletion are not bound, because the operations that change them,
+disable, delete, and purge, hold no plaintext to re-seal.
+
+Deleting version rows is the cheaper version of that gap. An attacker
+with vault write access can remove the newest `secret_version` rows so
+an older version becomes newest enabled. The env name and expiry are
+shared columns. When they did not change between the two versions, the
+older envelope's sealed metadata still matches them. The read then
+passes every check and returns the older value. That hands back a real
+prior secret, such as a rotated-away credential, with no error and no
+forged ciphertext. Neither which version is newest nor the set of rows
+is authenticated, so the rollback is not detectable in this format.
+
+One consequence to know. If you change a secret's env name or expiry,
+which writes a new version, and then disable that exact version, the
+active older version was sealed with the old value while the column
+holds the new one. An explicit read, `get` or `reveal <name>`, refuses
+that state until you re-set the secret to reconcile it. A batch verb,
+`exec` or a `reveal` filter, skips that one secret with a warning and
+delivers the rest. One stale secret never denies a whole run. It is rare
+and fails safe.
+
+The stored recipient is the attacker's other target. A write to
 `vault_meta` could point new secrets at a key the attacker controls.
-Every decrypting verb now compares the stored recipient to your loaded
+Every decrypting verb compares the stored recipient to your loaded
 identity and refuses on a mismatch, so tampering surfaces on the next
 read, even for old versions that still decrypt. The write path holds no
-identity by design, so it cannot prevent the bad write. Detection on
-read is the guard, not prevention at write time.
-
-The address binding stops an attacker moving an existing envelope
-between rows. It does not authenticate the value's origin. The
-recipient is a public key, so an attacker with vault write access can
-seal a chosen plaintext to it with the correct embedded address and
-overwrite a row. That forged value decrypts cleanly and passes both the
-address check and the recipient check, because the vault still holds
-your recipient. Authenticating the value itself would need a signing
-secret at write time, which the asymmetric write model deliberately
-lacks so a producer machine never holds one. Treat vault write access
-as a serious compromise, and see the roadmap for the deferred fix.
+identity by design, so this is detection on read, not prevention.
 
 ## Files and permissions
 
@@ -126,14 +148,15 @@ process memory. safetybox is a careful single-user store, not an
 HSM. At-rest disk protection like FileVault remains worth having
 underneath it.
 
-Vault write integrity is only partial. An attacker with vault write
-access can alter any metadata column, and can forge a secret's value
-by sealing chosen plaintext to the stored public recipient. The
-recipient swap is caught on the next read, but changes to `env_name`,
-`expires_at`, version state, or a value itself carry no integrity check
-in the current format. The address binding section explains how a
-forged value still passes every check. Treat write access to the vault
-file as a serious compromise.
+Vault write integrity is only partial. A recipient swap, an `env_name`
+edit, and an `expires_at` edit are all caught on the next read, through
+the recipient check and the metadata binding. Version state and
+soft-deletion are not, because the operations that change them hold no
+plaintext to re-seal. Deleting newer version rows to roll a read back to
+a prior value is unbound for the same reason. And a full envelope
+re-forge with a chosen value passes every check, since the recipient is
+public. The address and metadata binding section covers the details. Treat write access to the
+vault file as a serious compromise.
 
 ## Secret names are plaintext
 

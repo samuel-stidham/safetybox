@@ -4,6 +4,86 @@ All notable changes to safetybox are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [3.0.0] - 2026-07-23
+
+A format release. It seals each secret's env name and expiry into the
+envelope, so a vault-write attacker who edits those columns without the
+value is caught on the next read. That changes the on-disk format, so
+this is a major version, and an existing vault needs a one-time
+migration. The module path moves to
+`github.com/samuel-stidham/safetybox/v3`, which Go requires for a v3
+release.
+
+### Added
+
+- A `migrate` command. It re-seals every secret into the version 2
+  envelope, binding the env name and expiry into each value, then bumps
+  the format. It needs the passphrase, because re-sealing decrypts each
+  value, and it accepts `--passphrase-file`, including a process
+  substitution like `(secret-get name | psub)`. The identity and the
+  recipient do not change.
+
+### Changed
+
+- The envelope format is version 2. Each envelope carries a version
+  tag, the address, and the secret's env name and expiry. A read
+  returns the env name and expiry and compares them to the plaintext
+  columns. A version 1 envelope is refused, which blocks a downgrade to
+  the older unbound frame.
+- On a metadata mismatch, an explicit read (`get`, `reveal <name>`)
+  fails. A batch verb (`exec`, `reveal --env`, `reveal --prefix`) skips
+  the one secret with a warning and delivers the rest. This keeps one
+  stale secret from denying an entire `exec` run.
+- Bug and security tracking moved to GitHub issues. `docs/roadmap.md`
+  is closed and kept as a record of the earlier review items.
+
+### Security
+
+- The env name and expiry are bound into each version's envelope. A
+  vault-write attacker who edits either column without re-sealing the
+  value is caught on the next read, because re-sealing needs the
+  plaintext they do not have. An attacker who re-forges the whole
+  envelope with a chosen value and matching metadata still passes,
+  which is the documented limit of keyless writes. Version state and
+  deletion are not bound, because the operations that change them hold
+  no plaintext to re-seal.
+- Every explicit read refuses a valid-but-empty `env_name` column, a
+  tamper state the store never writes. `reveal <name>` previously
+  printed the value under that one state while `get` refused it. The
+  check now runs on `get` and `reveal <name>` alike, so the plaintext
+  verb no longer fails open on a metadata edit.
+
+### Fixed
+
+- migrate serializes against another migrate on the same vault through
+  an exclusive `vault.db.lock`. A second run refuses up front instead of
+  blocking on the database write lock. On a large vault that block would
+  time out with a raw busy error. This mirrors the identity lock rekey
+  and passwd use.
+- The metadata tamper error names the specific mismatch, the env name or
+  the expiry, instead of repeating the summary phrase. That makes an
+  explicit-read failure easier to scan.
+- `Seal` checks its framed fields, the address, env name, and expiry, in
+  a fixed order. A newline in more than one field now names the first
+  such field deterministically, where a map range randomized it before.
+- migrate's refusal of a recipient-swapped vault now carries the same
+  guidance the read verbs give, naming the tampered-vault,
+  interrupted-rekey, and wrong-identity causes. It previously printed
+  the bare sentinel.
+
+### Upgrading
+
+- A vault from safetybox 2.x opens under 3.0.0 only after
+  `safetybox migrate`. Update the binary, then run migrate once. It
+  re-seals every envelope in one transaction and bumps the format, so a
+  crash mid-migration rolls back and leaves the old vault intact. Back
+  up the vault file first.
+- Stop anything else that touches the vault before you migrate,
+  especially a script or cron job still running the old binary. A 2.x
+  `set` racing the migration can strand a version the new format cannot
+  read. The next read of that secret then fails with a tamper-shaped
+  error. Re-set the secret to repair it.
+
 ## [2.0.1] - 2026-07-23
 
 ### Added

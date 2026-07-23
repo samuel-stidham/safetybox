@@ -21,7 +21,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/samuel-stidham/safetybox/v2/internal/secret"
+	"github.com/samuel-stidham/safetybox/v3/internal/secret"
 
 	"filippo.io/age"
 	"github.com/awnumar/memguard"

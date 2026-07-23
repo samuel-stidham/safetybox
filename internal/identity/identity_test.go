@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/samuel-stidham/safetybox/v2/internal/identity"
+	"github.com/samuel-stidham/safetybox/v3/internal/identity"
 
 	"filippo.io/age"
 	"github.com/stretchr/testify/assert"

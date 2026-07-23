@@ -138,7 +138,17 @@ func (v *Vault) AppendVersion(
 		return nil, err
 	}
 
-	nextVersion, err := sealAndInsertVersion(ctx, txn, secretID, name, now, seal)
+	// Read the row as upsert left it, so the seal binds the effective
+	// env name and expiry into the new version's envelope. Empty strings
+	// mean the secret carries none.
+	row, err := findSecret(ctx, txn, name)
+	if err != nil {
+		return nil, err
+	}
+
+	nextVersion, err := sealAndInsertVersion(
+		ctx, txn, secretID, name, row.envName.String, row.expiresAt.String, now, seal,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -150,11 +160,6 @@ func (v *Vault) AppendVersion(
 		if err != nil {
 			return nil, fmt.Errorf("revoke previous versions of %s: %w", name, err)
 		}
-	}
-
-	row, err := findSecret(ctx, txn, name)
-	if err != nil {
-		return nil, err
 	}
 
 	meta, err := row.meta()
@@ -176,9 +181,10 @@ func (v *Vault) AppendVersion(
 }
 
 // sealAndInsertVersion computes the next monotonic version number,
-// seals the envelope to that address, and inserts the row.
+// seals the envelope to that address with the bound metadata, and
+// inserts the row.
 func sealAndInsertVersion(
-	ctx context.Context, txn *sql.Tx, secretID int64, name string, now time.Time, seal Sealer,
+	ctx context.Context, txn *sql.Tx, secretID int64, name, envName, expiresAt string, now time.Time, seal Sealer,
 ) (int64, error) {
 	var nextVersion int64
 
@@ -189,7 +195,7 @@ func sealAndInsertVersion(
 		return 0, fmt.Errorf("next version for %s: %w", name, err)
 	}
 
-	envelope, err := seal(CanonicalAddress(name, nextVersion))
+	envelope, err := seal(CanonicalAddress(name, nextVersion), envName, expiresAt)
 	if err != nil {
 		return 0, fmt.Errorf("seal %s: %w", name, err)
 	}
@@ -673,6 +679,7 @@ func (v *Vault) Entries(ctx context.Context, filter EntryFilter) ([]Entry, error
 		}
 
 		entry.EnvName = envName.String
+		entry.EnvNameValid = envName.Valid
 
 		if expiry, ok, err := parseNullableTime(expiresAt); err != nil {
 			return nil, err

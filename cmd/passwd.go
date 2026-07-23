@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/samuel-stidham/safetybox/v2/internal/identity"
+	"github.com/samuel-stidham/safetybox/v3/internal/identity"
 
 	"github.com/spf13/cobra"
 )

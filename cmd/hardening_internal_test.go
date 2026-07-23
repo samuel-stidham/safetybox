@@ -12,13 +12,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samuel-stidham/safetybox/v2/internal/identity"
-	"github.com/samuel-stidham/safetybox/v2/internal/vault"
+	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v3/internal/identity"
+	"github.com/samuel-stidham/safetybox/v3/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
 )
 
@@ -137,6 +139,37 @@ func swapVaultRecipient(t *testing.T, vaultPath, recipient string) {
 	require.NoError(t, err)
 }
 
+// setFormatVersion rewrites the vault's stored format version directly,
+// standing in for a vault written by a different safetybox build.
+func setFormatVersion(t *testing.T, vaultPath, version string) {
+	t.Helper()
+
+	handle, err := sql.Open("sqlite", "file:"+vaultPath)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, handle.Close()) }()
+
+	_, err = handle.ExecContext(t.Context(),
+		"UPDATE vault_meta SET value = ? WHERE key = 'format_version'", version)
+	require.NoError(t, err)
+}
+
+// TestMigrateOnNewerFormatDoesNotSuggestMigrate covers I5. A vault in a
+// format newer than this build cannot be upgraded by it, so the error
+// must point at upgrading the binary, not circularly at running migrate.
+func TestMigrateOnNewerFormatDoesNotSuggestMigrate(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fixture.runOK(fakeValueOne+"\n", "set", "api/one")
+
+	setFormatVersion(t, fixture.vaultPath, "9")
+
+	_, _, err := fixture.run("", "migrate")
+	require.ErrorContains(t, err, "upgrade safetybox")
+	assert.NotContains(t, err.Error(), "run `safetybox migrate`",
+		"the migrate error must not tell the user to run migrate")
+}
+
 // TestReadRefusesSwappedRecipient covers A-4: after the stored recipient
 // is swapped, every read verb must refuse with a clear tamper error,
 // not decrypt or fail vaguely.
@@ -158,6 +191,462 @@ func TestReadRefusesSwappedRecipient(t *testing.T) {
 
 	_, _, err = fixture.run("", "exec", "--", "true")
 	require.ErrorIs(t, err, ErrRecipientMismatch)
+}
+
+// tamperColumn edits a plaintext secret column directly, standing in for
+// a vault-write attacker who does not re-seal the value. The query per
+// column is a fixed literal, so no value is concatenated into the SQL.
+func tamperColumn(t *testing.T, vaultPath, column, value, name string) {
+	t.Helper()
+
+	var query string
+
+	switch column {
+	case "env_name":
+		query = "UPDATE secret SET env_name = ? WHERE name = ?"
+	case "expires_at":
+		query = "UPDATE secret SET expires_at = ? WHERE name = ?"
+	default:
+		t.Fatalf("unsupported column %q", column)
+	}
+
+	handle, err := sql.Open("sqlite", "file:"+vaultPath)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, handle.Close()) }()
+
+	_, err = handle.ExecContext(t.Context(), query, value, name)
+	require.NoError(t, err)
+}
+
+// TestReadRefusesTamperedEnvName covers the v3 metadata binding: an
+// attacker who edits the env name column without re-sealing the value
+// is caught on the next read, because the sealed env name no longer
+// matches the column. An explicitly named read fails loud. A batch verb
+// skips the mismatching secret with a warning and runs on.
+func TestReadRefusesTamperedEnvName(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fixture.runOK(fakeValueOne+"\n", "set", "api/one", "--env-name", "FAKE_ONE")
+
+	tamperColumn(t, fixture.vaultPath, "env_name", "FAKE_EVIL", "api/one")
+
+	_, _, err := fixture.run("", "get", "api/one")
+	require.ErrorIs(t, err, ErrMetadataTampered)
+
+	_, _, err = fixture.run("", "reveal", "api/one")
+	require.ErrorIs(t, err, ErrMetadataTampered)
+
+	// exec is a batch verb. The tampered secret is skipped with a warning
+	// that names it, and the child still runs, rather than one bad secret
+	// denying every variable to every command exec runs.
+	_, stderr, err := fixture.run("", "exec", "--", "true")
+	require.NoError(t, err, "a batch verb skips the tampered secret and runs the child")
+	assert.Contains(t, stderr, "api/one")
+	assert.Contains(t, stderr, "does not match the sealed value")
+}
+
+// TestReadRefusesTamperedExpiry covers the same binding for the expiry
+// column: adding or changing an expiry the sealed value does not carry
+// is caught on read.
+func TestReadRefusesTamperedExpiry(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fixture.runOK(fakeValueOne+"\n", "set", "api/exp")
+
+	tamperColumn(t, fixture.vaultPath, "expires_at", "2099-01-01T00:00:00Z", "api/exp")
+
+	_, _, err := fixture.run("", "get", "api/exp")
+	require.ErrorIs(t, err, ErrMetadataTampered)
+}
+
+// TestReadRefusesEmptyEnvName covers L1. The store maps an empty env
+// name to NULL and never writes a present empty string, so a
+// valid-but-empty env_name column is a tampered state the frame cannot
+// represent. Flipping NULL to empty also pulls the secret into the
+// env_name IS NOT NULL filter, so an explicit read must refuse and the
+// batch --env selection must skip it rather than print its value.
+func TestReadRefusesEmptyEnvName(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	// A secret with no env name, so the --env filter excludes it.
+	fixture.runOK(fakeValueOne+"\n", "set", "api/noenv")
+
+	// Flip the column from NULL to empty string, standing in for a
+	// vault-write attacker.
+	tamperColumn(t, fixture.vaultPath, "env_name", "", "api/noenv")
+
+	// Both explicit reads refuse, catching the metadata edit. reveal
+	// <name> is the plaintext verb, so a missed refusal there would print
+	// the value under a tampered column, which get would still catch.
+	_, _, err := fixture.run("", "get", "api/noenv")
+	require.ErrorIs(t, err, ErrMetadataTampered)
+
+	_, _, err = fixture.run("", "reveal", "api/noenv")
+	require.ErrorIs(t, err, ErrMetadataTampered)
+
+	// The flip newly selects the secret for reveal --env, but the batch
+	// path skips it with a warning rather than printing its value.
+	stdout, stderr := fixture.runOK("", "reveal", "--env")
+	assert.NotContains(t, stdout, fakeValueOne, "the flipped secret's value must not be printed")
+	assert.Contains(t, stderr, "api/noenv", "the skipped secret must be named")
+}
+
+// TestDisabledNewestVersionFailsSafeAfterMetadataChange covers M2 and the
+// documented fail-safe edge that had no test. Changing a secret's env
+// name writes a new version, and disabling that version leaves the older
+// enabled version bound to the old metadata while the column holds the
+// new value. An explicit read refuses, so the operator learns the secret
+// is unreadable. A batch verb skips it with a warning and still delivers
+// the healthy secrets, so one stale secret does not deny the whole run.
+// Re-setting the secret reconciles the state.
+func TestDisabledNewestVersionFailsSafeAfterMetadataChange(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	// A healthy env-named secret shares the exec batch with the stale one.
+	fixture.runOK(fakeValueTwo+"\n", "set", "api/healthy", "--env-name", "FAKE_HEALTHY")
+
+	// Version 1 has no env name, version 2 adds one, then version 2 is
+	// disabled, so the newest enabled version is 1 with stale metadata.
+	fixture.runOK(fakeValueOne+"\n", "set", "api/foo")
+	fixture.runOK(fakeValueOne+"\n", "set", "api/foo", "--env-name", "FAKE_FOO")
+	fixture.runOK("", "disable", "api/foo", "2")
+
+	// An explicit read fails loud on both get and reveal.
+	_, _, err := fixture.run("", "get", "api/foo")
+	require.ErrorIs(t, err, ErrMetadataTampered)
+
+	_, _, err = fixture.run("", "reveal", "api/foo")
+	require.ErrorIs(t, err, ErrMetadataTampered)
+
+	// exec skips the stale secret with a warning and still injects the
+	// healthy one, so one stale secret does not deny the whole batch.
+	stdout, stderr := fixture.runOK("", "exec", "--", "sh", "-c", `printf '%s' "$FAKE_HEALTHY"`)
+	assert.Equal(t, fakeValueTwo, stdout, "the healthy secret must still inject")
+	assert.Contains(t, stderr, "api/foo", "the skipped stale secret must be named")
+
+	// Re-setting the secret re-seals the newest version with the current
+	// column, so reads reconcile and succeed again.
+	fixture.runOK(fakeValueThree+"\n", "set", "api/foo", "--env-name", "FAKE_FOO")
+	assert.Equal(t, fakeValueThree, fixture.revealValue("api/foo"))
+}
+
+// downgradeToV1 rewrites a fixture's vault to format 1 with legacy
+// address-only envelopes, standing in for a vault from an older
+// safetybox. It decrypts each current envelope and re-seals it in the
+// v1 frame, then sets the format version back to 1.
+func downgradeToV1(t *testing.T, fixture *cliFixture) {
+	t.Helper()
+
+	passphrase, err := os.ReadFile(fixture.passphraseFile)
+	require.NoError(t, err)
+
+	key, cleanup, err := identity.Load(fixture.identityPath, bytes.TrimRight(passphrase, "\n"))
+	require.NoError(t, err)
+
+	defer cleanup()
+
+	handle, err := sql.Open("sqlite", "file:"+fixture.vaultPath)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, handle.Close()) }()
+
+	for _, row := range readVersionRows(t, handle) {
+		address := vault.CanonicalAddress(row.name, row.number)
+
+		value, _, err := envelope.Open(key, address, row.blob)
+		require.NoError(t, err)
+
+		legacy := sealLegacyForTest(t, key.Recipient(), address, value.Expose())
+		value.Destroy()
+
+		_, err = handle.ExecContext(t.Context(),
+			"UPDATE secret_version SET envelope = ? WHERE id = ?", legacy, row.id)
+		require.NoError(t, err)
+	}
+
+	_, err = handle.ExecContext(t.Context(),
+		"UPDATE vault_meta SET value = '1' WHERE key = 'format_version'")
+	require.NoError(t, err)
+}
+
+// versionRow is one secret_version row with its envelope, for the
+// downgrade helper.
+type versionRow struct {
+	id     int64
+	name   string
+	number int64
+	blob   []byte
+}
+
+// readVersionRows returns every version that still has an envelope. It
+// drains the cursor before returning, so the deferred close satisfies
+// the single-connection rule and the linter.
+func readVersionRows(t *testing.T, handle *sql.DB) []versionRow {
+	t.Helper()
+
+	rows, err := handle.QueryContext(t.Context(),
+		`SELECT sv.id, s.name, sv.version_number, sv.envelope
+		 FROM secret_version sv JOIN secret s ON s.id = sv.secret_id
+		 WHERE sv.envelope IS NOT NULL`)
+	require.NoError(t, err)
+
+	defer func() { _ = rows.Close() }()
+
+	var versions []versionRow
+
+	for rows.Next() {
+		var row versionRow
+
+		require.NoError(t, rows.Scan(&row.id, &row.name, &row.number, &row.blob))
+		versions = append(versions, row)
+	}
+
+	require.NoError(t, rows.Err())
+
+	return versions
+}
+
+// sealLegacyForTest builds a version 1 envelope: the address, a newline,
+// then the value, encrypted to the recipient.
+func sealLegacyForTest(t *testing.T, recipient age.Recipient, address string, value []byte) []byte {
+	t.Helper()
+
+	var raw bytes.Buffer
+
+	writer, err := age.Encrypt(&raw, recipient)
+	require.NoError(t, err)
+
+	_, err = writer.Write([]byte(address + "\n"))
+	require.NoError(t, err)
+
+	_, err = writer.Write(value)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	return raw.Bytes()
+}
+
+// TestMigrateUpgradesOldVault covers the v3 format migration end to end.
+// A format 1 vault with legacy envelopes is refused, migrate re-seals
+// every envelope into the v2 frame, and afterward reads work and the
+// metadata tamper check is in force.
+func TestMigrateUpgradesOldVault(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fixture.runOK(fakeValueOne+"\n", "set", "api/one", "--env-name", "FAKE_ONE")
+
+	downgradeToV1(t, fixture)
+
+	// The format 1 vault is refused until it is migrated.
+	_, _, err := fixture.run("", "get", "api/one")
+	require.ErrorIs(t, err, vault.ErrFormatVersion)
+
+	stdout, _ := fixture.runOK("", "migrate")
+	assert.InDelta(t, 1, decode(t, stdout)["migratedVersions"], 0, "one version must migrate")
+
+	// Reads work again and return the original value.
+	assert.Equal(t, fakeValueOne, fixture.revealValue("api/one"))
+
+	// The tamper check now guards the migrated vault.
+	tamperColumn(t, fixture.vaultPath, "env_name", "FAKE_EVIL", "api/one")
+
+	_, _, err = fixture.run("", "get", "api/one")
+	require.ErrorIs(t, err, ErrMetadataTampered)
+}
+
+// TestMigrateReadsPassphraseFromFifo pins that migrate accepts a
+// passphrase from a process substitution, such as
+// `--passphrase-file (secret-get name | psub)`, not only a regular
+// file. migrate reads the passphrase before it checks the format, so
+// running it on a current vault proves the fifo was read by reaching
+// the already-current message.
+func TestMigrateReadsPassphraseFromFifo(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fifo := filepath.Join(t.TempDir(), "pass.fifo")
+	require.NoError(t, unix.Mkfifo(fifo, 0o600))
+
+	go func() {
+		writer, err := os.OpenFile(fifo, os.O_WRONLY, 0)
+		if err != nil {
+			return
+		}
+
+		_, _ = writer.WriteString(fakePassphrase + "\n")
+		_ = writer.Close()
+	}()
+
+	fixture.passphraseFile = fifo
+
+	_, stderr := fixture.runOK("", "migrate")
+	assert.Contains(t, stderr, "already at the current format",
+		"migrate must read the passphrase from the fifo and reach the format check")
+}
+
+// TestMigrateStripsNewlineEnvName covers M3. A vault written before set
+// validated env names can hold one with a newline, which the version 2
+// frame cannot store. Without handling, migrate would roll back and the
+// vault could never open in v3. migrate strips the newline, warns naming
+// the secret, reconciles the column, and completes, so the value reads
+// back and the stored env name no longer carries the newline.
+func TestMigrateStripsNewlineEnvName(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fixture.runOK(fakeValueOne+"\n", "set", "api/legacy", "--env-name", "FAKE_LEGACY")
+
+	// Inject a newline into the env name column directly, standing in for
+	// a pre-validation vault, then downgrade to the legacy frame so
+	// migrate has real work to do.
+	tamperColumn(t, fixture.vaultPath, "env_name", "FAKE\nLEGACY", "api/legacy")
+	downgradeToV1(t, fixture)
+
+	stdout, stderr := fixture.runOK("", "migrate")
+	assert.InDelta(t, 1, decode(t, stdout)["migratedVersions"], 0, "the one version must migrate")
+	assert.Contains(t, stderr, "api/legacy", "the sanitized secret must be named")
+	assert.Contains(t, stderr, "newline", "the warning must explain what changed")
+
+	// The value reads back, proving migration completed rather than
+	// rolling back.
+	assert.Equal(t, fakeValueOne, fixture.revealValue("api/legacy"))
+
+	// The stored env name lost its newline, so column and sealed value
+	// agree and the read does not refuse.
+	stdout, _ = fixture.runOK("", "show", "api/legacy")
+	assert.Equal(t, "FAKELEGACY", decode(t, stdout)["envName"], "the newline must be stripped from the stored env name")
+}
+
+// TestMigratePreservesVersionShapes covers L3. A migration must re-seal
+// an expiry-bearing secret, a disabled version, and a soft-deleted
+// secret, while skipping a destroyed version whose envelope is NULL. The
+// prior migration test covered only one enabled env-named version, so
+// the state != destroyed AND envelope IS NOT NULL skip clause had no test.
+func TestMigratePreservesVersionShapes(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	// An expiry-bearing secret. The expiry must stay bound through migration.
+	fixture.runOK(fakeValueOne+"\n", "set", "api/expiry", "--expires", "2030-01-01T00:00:00Z")
+
+	// A multi-version secret with the older version disabled.
+	fixture.runOK(fakeValueOne+"\n", "set", "api/multi")
+	fixture.runOK(fakeValueTwo+"\n", "set", "api/multi")
+	fixture.runOK("", "disable", "api/multi", "1")
+
+	// A soft-deleted secret keeps its envelope, so it still migrates.
+	fixture.runOK(fakeValueThree+"\n", "set", "api/deleted")
+	fixture.runOK("", "delete", "api/deleted")
+
+	// A purged secret has a destroyed version with a NULL envelope, which
+	// the migration must skip.
+	fixture.runOK(fakeValueOne+"\n", "set", "api/purged")
+	fixture.runOK("", "purge", "api/purged", "--yes")
+
+	downgradeToV1(t, fixture)
+
+	stdout, _ := fixture.runOK("", "migrate")
+	assert.InDelta(t, 4, decode(t, stdout)["migratedVersions"], 0,
+		"every non-destroyed envelope migrates, the destroyed one is skipped")
+
+	// The expiry-bearing secret reads back and keeps its expiry bound.
+	assert.Equal(t, fakeValueOne, fixture.revealValue("api/expiry"))
+
+	stdout, _ = fixture.runOK("", "show", "api/expiry")
+	assert.NotNil(t, decode(t, stdout)["expiresAt"], "the expiry must survive migration")
+
+	// The multi-version secret resolves its newest enabled version.
+	assert.Equal(t, fakeValueTwo, fixture.revealValue("api/multi"))
+
+	// The purged secret stays destroyed with no recoverable value.
+	stdout, _ = fixture.runOK("", "show", "api/purged")
+
+	versions, ok := decode(t, stdout)["versions"].([]any)
+	require.True(t, ok)
+	require.Len(t, versions, 1)
+
+	version, ok := versions[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "destroyed", version["state"], "the purged version stays destroyed after migration")
+
+	// The soft-deleted secret revives and reads through the new frame.
+	fixture.runOK(fakeValueThree+"\n", "set", "api/deleted")
+	assert.Equal(t, fakeValueThree, fixture.revealValue("api/deleted"))
+}
+
+// TestMigrateRefusesSwappedRecipient covers I1. migrate re-seals every
+// envelope, so it must make the same recipient check every read verb
+// makes. A format 1 vault whose stored recipient was swapped is refused
+// before any re-seal, rather than quietly re-sealing to the loaded
+// identity and leaving the swap to surface on a later read. The refusal
+// carries the same tamper guidance the read verbs attach, so migrate
+// does not fail with a bare sentinel.
+func TestMigrateRefusesSwappedRecipient(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fixture.runOK(fakeValueOne+"\n", "set", "api/one")
+
+	downgradeToV1(t, fixture)
+
+	attacker, err := age.GenerateX25519Identity()
+	require.NoError(t, err)
+
+	swapVaultRecipient(t, fixture.vaultPath, attacker.Recipient().String())
+
+	_, _, err = fixture.run("", "migrate")
+	require.ErrorIs(t, err, vault.ErrRecipientMismatch)
+	assert.ErrorContains(t, err, "tampered",
+		"migrate must attach the same recipient-mismatch guidance the read verbs give")
+}
+
+// TestAcquireMigrateLockMissingDirHintsInit mirrors the identity-lock
+// variant: the migrate lock is taken before the vault opens, so a
+// missing vault directory must surface the vault not-found hint that
+// points at init, not a raw error about the lock file.
+func TestAcquireMigrateLockMissingDirHintsInit(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "nodir", "vault.db")
+
+	_, err := acquireMigrateLock(missing)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, vault.ErrVaultNotFound)
+}
+
+// TestMigrateRefusesWhileMigrateLockIsHeld pins the concurrent-migrate
+// guard: while one migrate holds the vault lock, a second migrate
+// refuses up front with a clear message, instead of blocking on the
+// SQLite write lock and timing out with a raw busy error on a large
+// vault.
+func TestMigrateRefusesWhileMigrateLockIsHeld(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fixture.runOK(fakeValueOne+"\n", "set", "api/one")
+
+	unlock, err := acquireMigrateLock(fixture.vaultPath)
+	require.NoError(t, err)
+
+	t.Cleanup(unlock)
+
+	_, _, err = fixture.run("", "migrate")
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "another safetybox migrate is running")
+}
+
+// TestMigrateRunsAfterMigrateLockIsReleased pins that the migrate lock is
+// advisory and transient: once the holder releases it, migrate proceeds.
+// The fixture vault is already current, so reaching the already-current
+// message proves the lock did not block the run.
+func TestMigrateRunsAfterMigrateLockIsReleased(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fixture.runOK(fakeValueOne+"\n", "set", "api/one")
+
+	unlock, err := acquireMigrateLock(fixture.vaultPath)
+	require.NoError(t, err)
+
+	unlock()
+
+	_, stderr := fixture.runOK("", "migrate")
+	assert.Contains(t, stderr, "already at the current format")
 }
 
 // TestSetClearsExpiry covers B-3: an explicit empty --expires removes an
@@ -264,6 +753,34 @@ func TestRekeyRunsAfterLockIsReleased(t *testing.T) {
 	unlock()
 
 	fixture.runOK("", "rekey")
+}
+
+// TestRekeyPreservesBoundMetadata covers M4. rekey re-seals every version
+// with the bound metadata that envelope.Open returns, so an env-named,
+// expiring secret must still read after rotation. The prior rekey
+// round-trip used a bare secret, so verifyBound compared empty to empty
+// and a dropped bound would have shipped green. Here get, reveal, and
+// exec all exercise the bound after a rekey, so losing it in the reseal
+// would refuse the reads with ErrMetadataTampered.
+func TestRekeyPreservesBoundMetadata(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fixture.runOK(fakeValueOne+"\n", "set", "api/rot",
+		"--env-name", "FAKE_ROT", "--expires", "2030-01-01T00:00:00Z")
+
+	fixture.runOK("", "rekey")
+
+	// get verifies the sealed env name and expiry against the columns, so
+	// it would refuse if the reseal dropped either.
+	_, _, err := fixture.run("", "get", "api/rot")
+	require.NoError(t, err, "get must not refuse an env-named, expiring secret after rekey")
+
+	// reveal returns the original value through the rotated identity.
+	assert.Equal(t, fakeValueOne, fixture.revealValue("api/rot"))
+
+	// exec injects the env-named secret, so the sealed env name survived.
+	stdout, _ := fixture.runOK("", "exec", "--", "sh", "-c", `printf '%s' "$FAKE_ROT"`)
+	assert.Equal(t, fakeValueOne, stdout, "the env name and value must survive rekey")
 }
 
 // TestFailedRekeyKeepsStagedKeyOnAmbiguousCommit covers R-7: when the
