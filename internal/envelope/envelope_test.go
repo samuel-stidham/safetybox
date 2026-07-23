@@ -48,7 +48,7 @@ func TestSealOpenBindsMetadata(t *testing.T) {
 
 	sealed, err := envelope.Seal(identity.Recipient(), testAddress, want, secret.New([]byte(fakePlaintext)))
 	require.NoError(t, err)
-	assert.NotContains(t, string(sealed), "FAKE_KEY", "the env name must be inside the ciphertext")
+	assert.NotContains(t, string(sealed), "FAKE_KEY", "the sealed blob must not contain the plaintext env name")
 
 	opened, bound, err := envelope.Open(identity, testAddress, sealed)
 	require.NoError(t, err)

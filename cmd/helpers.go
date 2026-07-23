@@ -418,21 +418,21 @@ func resolveNewest(cobraCmd *cobra.Command, opts *options, name string) (*resolv
 // valid-but-empty column is treated as tampering.
 func verifyBound(envNameValid bool, envName string, expiresAt *time.Time, bound envelope.Bound) error {
 	if envNameValid && envName == "" {
-		return fmt.Errorf("%w: env name is present but empty", ErrMetadataTampered)
+		return fmt.Errorf("%w: env name column is present but empty", ErrMetadataTampered)
 	}
 
 	if bound.EnvName != envName {
-		return fmt.Errorf("%w: env name does not match the sealed value", ErrMetadataTampered)
+		return fmt.Errorf("%w: env name mismatch", ErrMetadataTampered)
 	}
 
 	if (bound.ExpiresAt == "") != (expiresAt == nil) {
-		return fmt.Errorf("%w: expiry does not match the sealed value", ErrMetadataTampered)
+		return fmt.Errorf("%w: expiry mismatch", ErrMetadataTampered)
 	}
 
 	if expiresAt != nil {
 		sealed, err := time.Parse(time.RFC3339, bound.ExpiresAt)
 		if err != nil || !sealed.Equal(*expiresAt) {
-			return fmt.Errorf("%w: expiry does not match the sealed value", ErrMetadataTampered)
+			return fmt.Errorf("%w: expiry mismatch", ErrMetadataTampered)
 		}
 	}
 
