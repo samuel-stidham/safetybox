@@ -69,6 +69,11 @@ match the identity.
   race cannot overwrite the first tombstone's timestamp.
 - The `purge` help and the security model now state that a purged secret
   keeps its name in the vault forever.
+- A locked or unreadable vault no longer reports as half-created. Open
+  reserves the corrupt-vault hint for a missing table or version row,
+  and passes operational errors through unwrapped.
+- The loose-permission warning now says a vault others can "access"
+  rather than "read", since the check flags any group or world bit.
 
 ## [1.2.0] - 2026-07-12
 

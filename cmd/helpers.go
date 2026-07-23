@@ -29,7 +29,7 @@ func warnLooseVaultPerms(cobraCmd *cobra.Command, opts *options) {
 
 	for _, loose := range vault.LoosePermissions(path) {
 		printStderr(cobraCmd, fmt.Sprintf(
-			"warning: %s %s has mode %04o, group or world can read it: run chmod %04o on it\n",
+			"warning: %s %s has mode %04o, group or world can access it: run chmod %04o on it\n",
 			loose.Label, loose.Path, loose.Mode, loose.Recommend,
 		))
 	}

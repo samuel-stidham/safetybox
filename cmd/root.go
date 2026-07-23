@@ -55,8 +55,11 @@ func Execute(version string) {
 
 	if errors.As(err, &exit) {
 		// The child already reported its own failure, so propagate only
-		// its exit code with no extra safetybox error line.
+		// its exit code with no extra safetybox error line. SafeExit
+		// terminates the process, so the return is only for clarity.
 		memguard.SafeExit(exit.code)
+
+		return
 	}
 
 	// SilenceErrors is set on the root, so print the error here rather

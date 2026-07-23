@@ -8,6 +8,7 @@ package vault
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ const (
 	vaultFileMode = 0o600
 	vaultDirMode  = 0o700
 
+	metaTableName        = "vault_meta"
 	metaKeyFormatVersion = "format_version"
 	metaKeyRecipient     = "recipient"
 
@@ -105,15 +107,36 @@ func Open(path string) (*Vault, error) {
 
 	vault := &Vault{handle: handle, path: path}
 
+	// A file that opens as SQLite but lacks the vault_meta table is a
+	// half-created or non-vault file. Distinguish that from an
+	// operational error, such as a locked or unreadable database, which
+	// must not be reported as corrupt, because the recovery advice is to
+	// move the file aside.
+	hasMeta, err := vault.tableExists(metaTableName)
+	if err != nil {
+		_ = handle.Close()
+
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+
+	if !hasMeta {
+		_ = handle.Close()
+
+		return nil, fmt.Errorf("open %s: %w", path, ErrVaultCorrupt)
+	}
+
 	version, err := vault.metaValue(metaKeyFormatVersion)
 	if err != nil {
 		_ = handle.Close()
 
-		// A file that opens as SQLite but has no vault_meta row or table
-		// is not a readable vault. The commonest cause is a half-created
-		// vault from a crashed init. Report a sentinel the cmd layer can
-		// turn into recovery guidance, instead of a raw driver error.
-		return nil, fmt.Errorf("open %s: %w: %w", path, ErrVaultCorrupt, err)
+		// The table exists but its version row is missing, so the
+		// metadata is incomplete. Any other error is operational and
+		// passes through unwrapped.
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("open %s: %w", path, ErrVaultCorrupt)
+		}
+
+		return nil, fmt.Errorf("open %s: read format version: %w", path, err)
 	}
 
 	if version != strconv.Itoa(formatVersion) {
@@ -147,6 +170,25 @@ func (v *Vault) Recipient() (string, error) {
 	}
 
 	return recipient, nil
+}
+
+// tableExists reports whether a table of the given name is present in
+// the schema. It separates a half-created vault, a missing table, from
+// an operational error hit while reading the database.
+func (v *Vault) tableExists(name string) (bool, error) {
+	var found string
+
+	err := v.handle.QueryRowContext(context.Background(),
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("check %s table: %w", name, err)
+	}
+
+	return true, nil
 }
 
 func (v *Vault) metaValue(key string) (string, error) {

@@ -91,7 +91,7 @@ func TestLooseVaultPermsWarnOnOpen(t *testing.T) {
 
 	_, stderr := fixture.runOK("", "list")
 
-	assert.Contains(t, stderr, "group or world can read")
+	assert.Contains(t, stderr, "group or world can access")
 	assert.Contains(t, stderr, "0644")
 }
 

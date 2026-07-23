@@ -171,6 +171,29 @@ func TestOpenReportsCorruptVault(t *testing.T) {
 	require.ErrorIs(t, err, vault.ErrVaultCorrupt)
 }
 
+// TestOpenReportsCorruptVaultOnMissingVersionRow covers the other
+// corrupt shape: the vault_meta table exists but its format_version
+// row is gone. That missing row is corrupt metadata, so Open reports
+// the sentinel. Any error that is not a missing table or row is
+// operational and passes through instead, so a locked or unreadable
+// database is never mislabeled as corrupt.
+func TestOpenReportsCorruptVaultOnMissingVersionRow(t *testing.T) {
+	path := vaultPath(t)
+
+	require.NoError(t, vault.Create(path, fakeRecipient))
+
+	raw, err := sql.Open("sqlite", "file:"+path)
+	require.NoError(t, err)
+
+	_, err = raw.ExecContext(context.Background(),
+		"DELETE FROM vault_meta WHERE key = 'format_version'")
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	_, err = vault.Open(path)
+	require.ErrorIs(t, err, vault.ErrVaultCorrupt)
+}
+
 // TestLoosePermissionsFlagsLooseFile covers A-1 and B-5: a vault file
 // with group or world bits is reported for the cmd layer to warn about.
 func TestLoosePermissionsFlagsLooseFile(t *testing.T) {
