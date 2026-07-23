@@ -70,8 +70,11 @@ is authenticated, so the rollback is not detectable in this format.
 One consequence to know. If you change a secret's env name or expiry,
 which writes a new version, and then disable that exact version, the
 active older version was sealed with the old value while the column
-holds the new one. A read refuses that state until you re-set the
-secret to reconcile it. It is rare and fails safe.
+holds the new one. An explicit read, `get` or `reveal <name>`, refuses
+that state until you re-set the secret to reconcile it. A batch verb,
+`exec` or a `reveal` filter, skips that one secret with a warning and
+delivers the rest. One stale secret never denies a whole run. It is rare
+and fails safe.
 
 The stored recipient is the attacker's other target. A write to
 `vault_meta` could point new secrets at a key the attacker controls.

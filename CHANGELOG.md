@@ -30,6 +30,10 @@ release.
   returns the env name and expiry and compares them to the plaintext
   columns. A version 1 envelope is refused, which blocks a downgrade to
   the older unbound frame.
+- On a metadata mismatch, an explicit read (`get`, `reveal <name>`)
+  fails. A batch verb (`exec`, `reveal --env`, `reveal --prefix`) skips
+  the one secret with a warning and delivers the rest. This keeps one
+  stale secret from denying an entire `exec` run.
 
 ### Security
 

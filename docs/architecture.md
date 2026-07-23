@@ -92,7 +92,9 @@ applied at create time, and version 2 added none, because it changed
 the envelope frame, not the schema. Upgrading a version 1 vault is a
 re-seal, run by the `migrate` verb, which decrypts each old envelope
 and re-seals it into the version 2 frame. So format_version can exceed
-the number of SQL migrations.
+the number of SQL migrations. migrate holds the identity to decrypt, so
+it makes the same recipient check the read verbs do. It refuses a
+recipient-swapped vault before re-sealing.
 
 ## Error convention
 
