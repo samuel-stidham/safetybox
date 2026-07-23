@@ -33,4 +33,12 @@ var (
 	// canonical case. Callers whose failure cleanup is destructive
 	// must not treat this as proof the transaction rolled back.
 	ErrCommitAmbiguous = errors.New("commit failed with unknown outcome")
+	// ErrAlreadyCurrentFormat means a migration was asked to upgrade a
+	// vault that is already at the current format, so there is nothing
+	// to do. A re-run after a crash reaches this cleanly.
+	ErrAlreadyCurrentFormat = errors.New("vault is already at the current format")
+	// ErrRecipientMismatch means the vault's stored recipient does not
+	// match the identity presented to migrate, so migrate refuses before
+	// re-sealing every envelope, the way the read verbs refuse.
+	ErrRecipientMismatch = errors.New("vault recipient does not match your identity")
 )

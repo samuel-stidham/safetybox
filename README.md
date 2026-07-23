@@ -7,12 +7,12 @@ is no server, no GUI, and no unencrypted storage.
 
 ## Status
 
-safetybox 2.0 is the current major release. Every verb works end to
+safetybox 3.0 is the current major release. Every verb works end to
 end: init, set, get, reveal, show, list, stale, disable, delete,
-purge, exec, passwd, and rekey. The 2.0 release followed an
-adversarial security review, and the one remaining item lives on the
-[roadmap](docs/roadmap.md). Keep an offsite backup of the identity
-file, because no passphrase can recover the vault without it.
+purge, exec, passwd, rekey, and migrate. safetybox is feature complete
+for its single-user scope, so ongoing work is security and bug fixes.
+Keep an offsite backup of the identity file, because no passphrase can
+recover the vault without it.
 
 ## How it works
 
@@ -33,7 +33,7 @@ own address, and decryption fails if the ciphertext was moved or swapped.
 Install the latest tagged release with Go 1.26 or later.
 
 ```sh
-go install github.com/samuel-stidham/safetybox/v2@latest
+go install github.com/samuel-stidham/safetybox/v3@latest
 ```
 
 Or build from source.
@@ -49,6 +49,21 @@ The binary lands in `bin/safetybox`. To install it on your PATH, run
 is `~/go/bin` by default. Prebuilt binaries for Linux and macOS ship
 with each GitHub release. Every install path reports the same
 v-prefixed version through `safetybox --version`.
+
+## Upgrading from 1.x or 2.x
+
+3.0 changes the on-disk format. A vault created by safetybox 1.x or
+2.x must be migrated once before 3.0 can open it. Update the binary,
+then run:
+
+```sh
+safetybox migrate
+```
+
+It prompts for your passphrase, re-seals every secret into the new
+format in one transaction, and leaves your secret names, values, and
+versions unchanged. Back up the vault file first. Until you migrate,
+every other command tells you the vault needs it.
 
 ## Getting started
 

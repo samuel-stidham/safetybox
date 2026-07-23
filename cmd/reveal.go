@@ -9,8 +9,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/samuel-stidham/safetybox/v2/internal/secret"
-	"github.com/samuel-stidham/safetybox/v2/internal/vault"
+	"github.com/samuel-stidham/safetybox/v3/internal/secret"
+	"github.com/samuel-stidham/safetybox/v3/internal/vault"
 
 	"github.com/spf13/cobra"
 )
@@ -117,7 +117,9 @@ func runReveal(cobraCmd *cobra.Command, opts *options, names []string, flags rev
 	outputs := make([]revealOutput, 0)
 
 	if len(entries) > 0 {
-		outputs, err = decryptRevealEntries(cobraCmd, opts, recipient, entries)
+		// Explicit names fail loud on a metadata mismatch, matching get.
+		// A filter selection skips the mismatching secret and warns.
+		outputs, err = decryptRevealEntries(cobraCmd, opts, recipient, entries, len(names) > 0)
 		if err != nil {
 			return err
 		}
@@ -203,11 +205,11 @@ func entriesByName(ctx context.Context, openedVault *vault.Vault, names []string
 // decrypt path, so a batch pays the passphrase KDF a single time. The
 // recipient is verified against the identity before anything decrypts.
 func decryptRevealEntries(
-	cobraCmd *cobra.Command, opts *options, recipient string, entries []vault.Entry,
+	cobraCmd *cobra.Command, opts *options, recipient string, entries []vault.Entry, explicit bool,
 ) ([]revealOutput, error) {
 	outputs := make([]revealOutput, 0, len(entries))
 
-	err := forEachDecrypted(cobraCmd, opts, recipient, entries,
+	err := forEachDecrypted(cobraCmd, opts, recipient, entries, explicit,
 		func(entry vault.Entry, expired bool, value secret.Value) error {
 			output := revealOutput{
 				Name:      entry.Name,

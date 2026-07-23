@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/samuel-stidham/safetybox/v2/internal/envelope"
-	"github.com/samuel-stidham/safetybox/v2/internal/identity"
-	"github.com/samuel-stidham/safetybox/v2/internal/vault"
+	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v3/internal/identity"
+	"github.com/samuel-stidham/safetybox/v3/internal/vault"
 )
 
 // ErrRecipientMismatch means the vault's stored recipient does not
@@ -14,6 +14,12 @@ import (
 // recipient, the attack the address binding does not cover, or simply
 // the wrong identity for this vault.
 var ErrRecipientMismatch = errors.New("vault recipient does not match your identity")
+
+// ErrMetadataTampered means a plaintext column no longer matches the
+// metadata sealed into the newest version's envelope. A vault-write
+// attacker who edited the column without re-sealing the value is
+// caught on the next read.
+var ErrMetadataTampered = errors.New("vault metadata does not match the sealed value")
 
 // exitCodeError carries a child process exit code from exec back to
 // Execute. It is a struct error because the handler must read the
@@ -57,7 +63,11 @@ func userHint(err error) error {
 	case errors.Is(err, vault.ErrVersionNotFound):
 		return fmt.Errorf("%w: `show` the secret to see its versions", err)
 	case errors.Is(err, vault.ErrFormatVersion):
-		return fmt.Errorf("%w: upgrade safetybox to open this vault", err)
+		return fmt.Errorf(
+			"%w: if this vault is from an older safetybox, run `safetybox migrate` to upgrade it, "+
+				"otherwise upgrade safetybox to open it",
+			err,
+		)
 	default:
 		return err
 	}

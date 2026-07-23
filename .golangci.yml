@@ -175,7 +175,7 @@ formatters:
     gci:
       sections:
         - standard
-        - prefix(github.com/samuel-stidham/safetybox/v2)
+        - prefix(github.com/samuel-stidham/safetybox/v3)
         - default
       # Without this, gci ignores the section order above and puts
       # the prefix group last, undoing the Makefile's gci target.

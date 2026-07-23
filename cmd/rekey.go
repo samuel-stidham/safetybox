@@ -8,9 +8,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/samuel-stidham/safetybox/v2/internal/envelope"
-	"github.com/samuel-stidham/safetybox/v2/internal/identity"
-	"github.com/samuel-stidham/safetybox/v2/internal/vault"
+	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v3/internal/identity"
+	"github.com/samuel-stidham/safetybox/v3/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -228,7 +228,7 @@ func rekeyVault(cobraCmd *cobra.Command, opts *options, oldKey, newKey *age.X255
 		func(name string, number int64, blob []byte) ([]byte, error) {
 			address := vault.CanonicalAddress(name, number)
 
-			value, err := envelope.Open(oldKey, address, blob)
+			value, bound, err := envelope.Open(oldKey, address, blob)
 			if err != nil {
 				return nil, fmt.Errorf("open %s: %w", address, err)
 			}
@@ -238,7 +238,9 @@ func rekeyVault(cobraCmd *cobra.Command, opts *options, oldKey, newKey *age.X255
 			// for the length of the whole rotation.
 			defer value.Destroy()
 
-			resealed, err := envelope.Seal(newKey.Recipient(), address, value)
+			// Preserve each version's bound metadata through the reseal,
+			// so the env name and expiry stay bound to their version.
+			resealed, err := envelope.Seal(newKey.Recipient(), address, bound, value)
 			if err != nil {
 				return nil, fmt.Errorf("reseal %s: %w", address, err)
 			}

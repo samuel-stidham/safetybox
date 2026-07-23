@@ -9,8 +9,8 @@ import (
 	osexec "os/exec"
 	"syscall"
 
-	"github.com/samuel-stidham/safetybox/v2/internal/secret"
-	"github.com/samuel-stidham/safetybox/v2/internal/vault"
+	"github.com/samuel-stidham/safetybox/v3/internal/secret"
+	"github.com/samuel-stidham/safetybox/v3/internal/vault"
 
 	"github.com/spf13/cobra"
 )
@@ -125,43 +125,47 @@ func buildSecretEnv(cobraCmd *cobra.Command, opts *options) ([]string, error) {
 	// the last, so collisions warn too.
 	sourceOf := make(map[string]string, len(entries))
 
-	err = forEachDecrypted(cobraCmd, opts, recipient, entries, func(entry vault.Entry, _ bool, value secret.Value) error {
-		if !isShellIdentifier(entry.EnvName) {
-			printStderr(cobraCmd, fmt.Sprintf(
-				"warning: secret %s env name %q is not a valid variable name, skipped\n",
-				entry.Name, entry.EnvName,
-			))
+	// exec always selects a batch by env-name filter, never a single
+	// explicit name, so a mismatching secret is skipped with a warning
+	// rather than aborting the run and denying every variable to the child.
+	err = forEachDecrypted(cobraCmd, opts, recipient, entries, false,
+		func(entry vault.Entry, _ bool, value secret.Value) error {
+			if !isShellIdentifier(entry.EnvName) {
+				printStderr(cobraCmd, fmt.Sprintf(
+					"warning: secret %s env name %q is not a valid variable name, skipped\n",
+					entry.Name, entry.EnvName,
+				))
+
+				return nil
+			}
+
+			// A NUL byte in the value makes os/exec reject the whole
+			// environment, which would fail every command exec runs. Skip
+			// the offending secret with a warning that names it, the way
+			// reveal --format handles the same value, rather than letting
+			// one binary secret deny the verb.
+			if bytes.IndexByte(value.Expose(), 0) >= 0 {
+				printStderr(cobraCmd, fmt.Sprintf(
+					"warning: secret %s value contains a NUL byte, which an environment variable cannot hold, skipped\n",
+					entry.Name,
+				))
+
+				return nil
+			}
+
+			if previous, collided := sourceOf[entry.EnvName]; collided {
+				printStderr(cobraCmd, fmt.Sprintf(
+					"warning: env name %s from %s overrides the value from %s\n",
+					entry.EnvName, entry.Name, previous,
+				))
+			}
+
+			sourceOf[entry.EnvName] = entry.Name
+
+			env = append(env, entry.EnvName+"="+string(value.Expose()))
 
 			return nil
-		}
-
-		// A NUL byte in the value makes os/exec reject the whole
-		// environment, which would fail every command exec runs. Skip
-		// the offending secret with a warning that names it, the way
-		// reveal --format handles the same value, rather than letting
-		// one binary secret deny the verb.
-		if bytes.IndexByte(value.Expose(), 0) >= 0 {
-			printStderr(cobraCmd, fmt.Sprintf(
-				"warning: secret %s value contains a NUL byte, which an environment variable cannot hold, skipped\n",
-				entry.Name,
-			))
-
-			return nil
-		}
-
-		if previous, collided := sourceOf[entry.EnvName]; collided {
-			printStderr(cobraCmd, fmt.Sprintf(
-				"warning: env name %s from %s overrides the value from %s\n",
-				entry.EnvName, entry.Name, previous,
-			))
-		}
-
-		sourceOf[entry.EnvName] = entry.Name
-
-		env = append(env, entry.EnvName+"="+string(value.Expose()))
-
-		return nil
-	})
+		})
 	if err != nil {
 		return nil, err
 	}

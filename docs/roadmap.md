@@ -1,36 +1,34 @@
 # Roadmap
 
-Work planned for after 2.0.0. The 2.0.0 review left several items open.
-The low-priority ones are now done: rekey streams its envelopes, every
-secret reader wipes the buffers it outgrows, including the interactive
-prompt and the identity loader, the vault methods take a caller
-context, and the minor comment and warning notes are resolved. The
-size bound those items also proposed was judged unnecessary for a
-single-user CLI and deliberately dropped, so the reads stay unbounded.
-The no-echo prompt now has a pseudo-terminal test, added in 2.0.1. One
-item remains, the one with real security weight.
+The 2.0.0 security review left a set of items open. They are all done
+now. The low-priority ones shipped across 2.0.x: rekey streams its
+envelopes, every secret reader wipes the buffers it outgrows, the vault
+methods take a caller context, and the no-echo prompt gained a
+pseudo-terminal test. The size bound those items also proposed was
+judged unnecessary for a single-user CLI and deliberately dropped, so
+the reads stay unbounded.
 
-## Authenticated vault contents
+The one item with real security weight, binding the mutable metadata
+into the envelope, shipped in 3.0.0. See the
+[security model](security.md) for what it protects and its limits.
 
-Priority: high. Touches the on-disk format.
+## Done in 3.0.0: metadata binding
 
-The 2.0.0 release added a recipient check. Every read verb compares the
-vault's stored recipient to the loaded identity and refuses on a
-mismatch. A swapped recipient is caught on the next read. The check does
-not reach the rest of the vault. An attacker with write access can still
-alter `env_name`, `expires_at`, or a version's state, and nothing
-detects it.
+Every read verb already compared the vault's stored recipient to the
+loaded identity and refused on a mismatch. That check did not reach the
+rest of the vault, so a write attacker could edit `env_name` or
+`expires_at` undetected.
 
-The same gap covers a secret's value. The recipient is a public key, so
-a write attacker can seal a chosen plaintext to it with the correct
-address and overwrite a row. The forged value passes the address binding
-and the recipient check. Authenticating a value needs a signing secret
-at write time, which the asymmetric write model deliberately lacks, so
-closing this without giving every producer machine a signing key is the
-open design tension.
+3.0.0 seals the env name and expiry into each version's envelope. A read
+returns them and compares them to the plaintext columns, so an edit to a
+column without the value is caught. Re-sealing needs the plaintext, so
+the write path stays keyless. The limit, documented in the security
+model, is that an attacker who re-forges the whole envelope with a
+chosen value and matching metadata still passes, and that version state
+and deletion are not bound.
 
-The fix is an authenticated structure over the metadata and the
-value-to-row binding, so any tampering fails a check on read. That
-changes the on-disk format, so it needs a format bump and a migration.
-This is the one deferred item with real security weight. It belongs in
-its own release.
+## Open
+
+Nothing is planned. safetybox is feature complete for its single-user
+scope. Future work is security fixes and bug fixes, released as patch
+and minor versions.

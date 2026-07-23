@@ -3,7 +3,7 @@ package main
 import (
 	"runtime/debug"
 
-	"github.com/samuel-stidham/safetybox/v2/cmd"
+	"github.com/samuel-stidham/safetybox/v3/cmd"
 
 	"github.com/awnumar/memguard"
 )

@@ -6,19 +6,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samuel-stidham/safetybox/v2/internal/vault"
+	"github.com/samuel-stidham/safetybox/v3/internal/vault"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // fakeSealer returns a fake envelope stamped with its address. The
-// vault never inspects envelope bytes, so tests do not need real
-// crypto.
+// vault never inspects envelope bytes, and the bound metadata is
+// verified in the cmd and envelope tests, so this fake ignores it.
 func fakeSealer(t *testing.T) vault.Sealer {
 	t.Helper()
 
-	return func(address string) ([]byte, error) {
+	return func(address, _, _ string) ([]byte, error) {
 		return []byte("fake-envelope:" + address), nil
 	}
 }

@@ -297,6 +297,31 @@ when another process blocks the scrub.
 {"recipient":"age1...","rekeyedVersions":4,"backupIdentity":"~/.config/safetybox/identity.age.bak"}
 ```
 
+## migrate
+
+```sh
+safetybox migrate
+```
+
+Upgrades a vault from an older safetybox to the current on-disk format.
+The current format seals each secret's env name and expiry into its
+envelope, so a later edit to those columns is caught on read. migrate
+re-seals every secret into that format and bumps the format version.
+
+It needs the passphrase, because re-sealing decrypts each value. The
+passphrase comes from the prompt or the global `--passphrase-file`,
+which accepts a process substitution such as
+`(secret-get name | psub)`. The identity and the recipient do not
+change, only the envelopes are re-framed.
+
+Everything runs in one transaction. A crash mid-migration rolls back
+and leaves the old vault intact. Back up the vault file first. A vault
+already at the current format reports that and does nothing.
+
+```json
+{"migratedVersions":12,"result":"migrated"}
+```
+
 ## version
 
 ```sh

@@ -7,11 +7,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 
-	"github.com/samuel-stidham/safetybox/v2/internal/envelope"
-	"github.com/samuel-stidham/safetybox/v2/internal/identity"
-	"github.com/samuel-stidham/safetybox/v2/internal/secret"
-	"github.com/samuel-stidham/safetybox/v2/internal/vault"
+	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v3/internal/identity"
+	"github.com/samuel-stidham/safetybox/v3/internal/secret"
+	"github.com/samuel-stidham/safetybox/v3/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -233,8 +234,18 @@ func verifyRecipient(expectedRecipient string, key *age.X25519Identity) error {
 // on one address-verification and expiry-warning behavior. It refuses
 // before decrypting anything when the stored recipient does not match
 // the identity.
+//
+// explicit selects how a metadata mismatch is reported. An explicitly
+// named secret fails loud, matching get, so a caller who asked for one
+// secret by name learns it is unreadable. A batch selection, exec or a
+// reveal filter, skips the one mismatching secret with a warning and
+// delivers the rest, the way NUL bytes and invalid env names are
+// already handled. A benign disable after a metadata change lands here,
+// so one such secret must not take down the whole run. A decrypt or
+// framing failure always fails loud, since that signals corruption or a
+// downgrade attempt, not a benign metadata edit.
 func forEachDecrypted(cobraCmd *cobra.Command, opts *options, expectedRecipient string, entries []vault.Entry,
-	visit func(entry vault.Entry, expired bool, value secret.Value) error,
+	explicit bool, visit func(entry vault.Entry, expired bool, value secret.Value) error,
 ) error {
 	key, cleanup, err := loadIdentity(cobraCmd, opts)
 	if err != nil {
@@ -252,9 +263,23 @@ func forEachDecrypted(cobraCmd *cobra.Command, opts *options, expectedRecipient 
 	for _, entry := range entries {
 		address := vault.CanonicalAddress(entry.Name, entry.Version)
 
-		value, err := envelope.Open(key, address, entry.Envelope)
+		value, bound, err := envelope.Open(key, address, entry.Envelope)
 		if err != nil {
 			return fmt.Errorf("open %s: %w", entry.Name, userHint(err))
+		}
+
+		if err := verifyBound(entry.EnvNameValid, entry.EnvName, entry.ExpiresAt, bound); err != nil {
+			value.Destroy()
+
+			if explicit {
+				return fmt.Errorf("verify %s: %w", entry.Name, err)
+			}
+
+			printStderr(cobraCmd, fmt.Sprintf(
+				"warning: secret %s metadata does not match the sealed value, skipped\n", entry.Name,
+			))
+
+			continue
 		}
 
 		expired := entry.Expired(now)
@@ -322,9 +347,22 @@ func resolveNewest(cobraCmd *cobra.Command, opts *options, name string) (*resolv
 
 	address := vault.CanonicalAddress(name, newest.Version.Number)
 
-	value, err := envelope.Open(key, address, newest.Envelope)
+	value, bound, err := envelope.Open(key, address, newest.Envelope)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", name, userHint(err))
+	}
+
+	envNameValid := newest.Secret.EnvName != nil
+
+	envName := ""
+	if envNameValid {
+		envName = *newest.Secret.EnvName
+	}
+
+	if err := verifyBound(envNameValid, envName, newest.Secret.ExpiresAt, bound); err != nil {
+		value.Destroy()
+
+		return nil, fmt.Errorf("verify %s: %w", name, err)
 	}
 
 	if newest.Secret.Expired(nowUTC()) {
@@ -332,4 +370,38 @@ func resolveNewest(cobraCmd *cobra.Command, opts *options, name string) (*resolv
 	}
 
 	return &resolved{meta: newest.Secret, version: newest.Version, value: value}, nil
+}
+
+// verifyBound refuses when the metadata sealed into the envelope does
+// not match the plaintext columns the vault holds. A vault-write
+// attacker who edits a column without re-sealing the value is caught
+// here, since re-sealing needs the plaintext they do not have. An
+// attacker who re-forges the whole envelope with matching metadata
+// still passes, which is the documented limit of keyless writes.
+//
+// envNameValid reports whether the env name column is non-NULL. The
+// store maps an empty env name to NULL and never writes a present empty
+// string, and the frame cannot represent one distinctly from none, so a
+// valid-but-empty column is treated as tampering.
+func verifyBound(envNameValid bool, envName string, expiresAt *time.Time, bound envelope.Bound) error {
+	if envNameValid && envName == "" {
+		return fmt.Errorf("%w: env name is present but empty", ErrMetadataTampered)
+	}
+
+	if bound.EnvName != envName {
+		return fmt.Errorf("%w: env name does not match the sealed value", ErrMetadataTampered)
+	}
+
+	if (bound.ExpiresAt == "") != (expiresAt == nil) {
+		return fmt.Errorf("%w: expiry does not match the sealed value", ErrMetadataTampered)
+	}
+
+	if expiresAt != nil {
+		sealed, err := time.Parse(time.RFC3339, bound.ExpiresAt)
+		if err != nil || !sealed.Equal(*expiresAt) {
+			return fmt.Errorf("%w: expiry does not match the sealed value", ErrMetadataTampered)
+		}
+	}
+
+	return nil
 }

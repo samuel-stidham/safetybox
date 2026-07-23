@@ -8,7 +8,8 @@ var (
 	ErrAddressMismatch = errors.New("envelope address mismatch")
 	// ErrDecryptFailed means age could not open the envelope.
 	ErrDecryptFailed = errors.New("envelope decrypt failed")
-	// ErrInvalidAddress means the address cannot be framed inside an
-	// envelope, for example because it contains a newline.
-	ErrInvalidAddress = errors.New("invalid envelope address")
+	// ErrInvalidFrame means a field bound into the envelope, such as the
+	// address, env name, or expiry, cannot be framed, for example
+	// because it contains a newline.
+	ErrInvalidFrame = errors.New("invalid envelope frame")
 )

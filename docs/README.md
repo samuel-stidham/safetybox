@@ -31,5 +31,5 @@ the order you would need them.
   pipeline.
 - [Linting policy](linting.md) records every linter exception and its
   reason.
-- [Roadmap](roadmap.md) tracks the security work planned for after
-  2.0.0.
+- [Roadmap](roadmap.md) records the security work the reviews left open,
+  now all done.
