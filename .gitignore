@@ -51,7 +51,6 @@ artifacts/
 
 # Adversarial review reports are always named in uppercase and kept out
 # of the repository: REPORT-A.md and REPORT-B.md for the two reviewer
-# passes, and REPORT.md for the combined report. REVIEW.md is a
-# different, tracked file, the Kilo code-review policy, not a report.
+# passes, and REPORT.md for the combined report.
 REPORT.md
 REPORT-*.md
