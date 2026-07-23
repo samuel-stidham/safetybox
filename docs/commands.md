@@ -330,6 +330,13 @@ Everything runs in one transaction. A crash mid-migration rolls back
 and leaves the old vault intact. Back up the vault file first. A vault
 already at the current format reports that and does nothing.
 
+migrate holds an exclusive lock on a `vault.db.lock` sibling for its
+whole run, so two migrates on one vault can never interleave. A second
+run refuses up front while one is active, rather than blocking on the
+database write lock and failing with a raw busy error. The empty lock
+file is a permanent, harmless sibling of the vault, the same design the
+identity lock uses for rekey and passwd.
+
 An env name stored by a very old safetybox could contain a newline,
 which the new format cannot carry. migrate strips the newline, warns
 naming the secret, and stores the cleaned name, so such a vault still

@@ -8,6 +8,7 @@ import (
 	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
 	"github.com/samuel-stidham/safetybox/v3/internal/vault"
 
+	"filippo.io/age"
 	"github.com/spf13/cobra"
 )
 
@@ -54,6 +55,18 @@ func runMigrate(cobraCmd *cobra.Command, opts *options) error {
 		return err
 	}
 
+	// Serialize against another migrate on the same vault before loading
+	// the identity or opening a write transaction. Without this, two
+	// concurrent migrates both pass the format pre-check, then the loser
+	// blocks on the write lock and can time out with a raw busy error
+	// rather than the clear refusal this gives.
+	unlock, err := acquireMigrateLock(vaultPath)
+	if err != nil {
+		return userHint(err)
+	}
+
+	defer unlock()
+
 	// Re-sealing must decrypt every value, so migrate needs the identity.
 	key, cleanup, err := loadIdentity(cobraCmd, opts)
 	if err != nil {
@@ -64,37 +77,7 @@ func runMigrate(cobraCmd *cobra.Command, opts *options) error {
 
 	recipient := key.Recipient()
 
-	count, err := vault.Migrate(ctx, vaultPath, recipient.String(),
-		func(name string, number int64, envName, expiresAt string, oldEnvelope []byte) ([]byte, string, error) {
-			address := vault.CanonicalAddress(name, number)
-
-			value, err := envelope.OpenLegacy(key, address, oldEnvelope)
-			if err != nil {
-				// OpenLegacy already prefixes the address, and the vault
-				// layer prefixes the secret and version, so wrap no further.
-				return nil, "", userHint(err)
-			}
-
-			defer value.Destroy()
-
-			sealedEnvName, changed := frameSafeEnvName(envName)
-			if changed {
-				printStderr(cobraCmd, fmt.Sprintf(
-					"warning: secret %s had an env name with a newline the new format cannot store, "+
-						"stored as %q, re-set it with --env-name if you need a different one\n",
-					name, sealedEnvName,
-				))
-			}
-
-			bound := envelope.Bound{EnvName: sealedEnvName, ExpiresAt: expiresAt}
-
-			sealed, err := envelope.Seal(recipient, address, bound, value)
-			if err != nil {
-				return nil, "", userHint(err)
-			}
-
-			return sealed, sealedEnvName, nil
-		})
+	count, err := vault.Migrate(ctx, vaultPath, recipient.String(), newMigrateResealer(cobraCmd, key, recipient))
 	if errors.Is(err, vault.ErrAlreadyCurrentFormat) {
 		printStderr(cobraCmd, "vault is already at the current format, nothing to migrate\n")
 
@@ -113,4 +96,45 @@ func runMigrate(cobraCmd *cobra.Command, opts *options) error {
 	}
 
 	return printJSON(cobraCmd, opts, migrateOutput{MigratedVersions: count, Result: "migrated"})
+}
+
+// newMigrateResealer builds the reseal callback the vault layer calls
+// for each version during migration. It decrypts the legacy envelope
+// with the loaded identity and re-seals the value into the current
+// frame. It sanitizes a legacy env name the new frame cannot carry,
+// warns naming the secret, and returns the env name it actually sealed
+// so the vault layer can reconcile the shared column.
+func newMigrateResealer(
+	cobraCmd *cobra.Command, key *age.X25519Identity, recipient age.Recipient,
+) vault.MigrationResealer {
+	return func(name string, number int64, envName, expiresAt string, oldEnvelope []byte) ([]byte, string, error) {
+		address := vault.CanonicalAddress(name, number)
+
+		value, err := envelope.OpenLegacy(key, address, oldEnvelope)
+		if err != nil {
+			// OpenLegacy already prefixes the address, and the vault layer
+			// prefixes the secret and version, so wrap no further.
+			return nil, "", userHint(err)
+		}
+
+		defer value.Destroy()
+
+		sealedEnvName, changed := frameSafeEnvName(envName)
+		if changed {
+			printStderr(cobraCmd, fmt.Sprintf(
+				"warning: secret %s had an env name with a newline the new format cannot store, "+
+					"stored as %q, re-set it with --env-name if you need a different one\n",
+				name, sealedEnvName,
+			))
+		}
+
+		bound := envelope.Bound{EnvName: sealedEnvName, ExpiresAt: expiresAt}
+
+		sealed, err := envelope.Seal(recipient, address, bound, value)
+		if err != nil {
+			return nil, "", userHint(err)
+		}
+
+		return sealed, sealedEnvName, nil
+	}
 }

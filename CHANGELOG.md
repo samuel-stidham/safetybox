@@ -21,7 +21,10 @@ release.
   the format. It needs the passphrase, because re-sealing decrypts each
   value, and it accepts `--passphrase-file`, including a process
   substitution like `(secret-get name | psub)`. The identity and the
-  recipient do not change.
+  recipient do not change. It holds an exclusive lock on a
+  `vault.db.lock` sibling for its run, so a second migrate on the same
+  vault refuses up front instead of blocking on the database write lock,
+  the same serialization rekey and passwd use for the identity.
 
 ### Changed
 

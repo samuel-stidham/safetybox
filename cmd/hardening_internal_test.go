@@ -593,6 +593,45 @@ func TestMigrateRefusesSwappedRecipient(t *testing.T) {
 	require.ErrorIs(t, err, vault.ErrRecipientMismatch)
 }
 
+// TestMigrateRefusesWhileMigrateLockIsHeld pins the concurrent-migrate
+// guard: while one migrate holds the vault lock, a second migrate
+// refuses up front with a clear message, instead of blocking on the
+// SQLite write lock and timing out with a raw busy error on a large
+// vault.
+func TestMigrateRefusesWhileMigrateLockIsHeld(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fixture.runOK(fakeValueOne+"\n", "set", "api/one")
+
+	unlock, err := acquireMigrateLock(fixture.vaultPath)
+	require.NoError(t, err)
+
+	t.Cleanup(unlock)
+
+	_, _, err = fixture.run("", "migrate")
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "another safetybox migrate is running")
+}
+
+// TestMigrateRunsAfterMigrateLockIsReleased pins that the migrate lock is
+// advisory and transient: once the holder releases it, migrate proceeds.
+// The fixture vault is already current, so reaching the already-current
+// message proves the lock did not block the run.
+func TestMigrateRunsAfterMigrateLockIsReleased(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fixture.runOK(fakeValueOne+"\n", "set", "api/one")
+
+	unlock, err := acquireMigrateLock(fixture.vaultPath)
+	require.NoError(t, err)
+
+	unlock()
+
+	_, stderr := fixture.runOK("", "migrate")
+	assert.Contains(t, stderr, "already at the current format")
+}
+
 // TestSetClearsExpiry covers B-3: an explicit empty --expires removes an
 // existing expiry instead of silently keeping it.
 func TestSetClearsExpiry(t *testing.T) {
