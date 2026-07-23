@@ -64,6 +64,10 @@ release.
 - `Seal` checks its framed fields, the address, env name, and expiry, in
   a fixed order. A newline in more than one field now names the first
   such field deterministically, where a map range randomized it before.
+- migrate's refusal of a recipient-swapped vault now carries the same
+  guidance the read verbs give, naming the tampered-vault,
+  interrupted-rekey, and wrong-identity causes. It previously printed
+  the bare sentinel.
 
 ### Upgrading
 
@@ -72,6 +76,11 @@ release.
   re-seals every envelope in one transaction and bumps the format, so a
   crash mid-migration rolls back and leaves the old vault intact. Back
   up the vault file first.
+- Stop anything else that touches the vault before you migrate,
+  especially a script or cron job still running the old binary. A 2.x
+  `set` racing the migration can strand a version the new format cannot
+  read. The next read of that secret then fails with a tamper-shaped
+  error. Re-set the secret to repair it.
 
 ## [2.0.1] - 2026-07-23
 

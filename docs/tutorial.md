@@ -364,7 +364,9 @@ safetybox migrate
 
 migrate prompts for your passphrase, re-seals every secret into the new
 format in one transaction, and bumps the format version. Your names,
-values, and versions are unchanged. Back up the vault file first. Run
+values, and versions are unchanged. Back up the vault file first. Stop
+anything else that touches the vault, especially a script still on the
+old binary, or a racing write can strand an unreadable version. Run
 it once. A vault already at the current format, like the one you just
 created, reports that and does nothing.
 
