@@ -17,10 +17,11 @@ import (
 
 // warnLooseVaultPerms warns once per invocation when the vault file,
 // its directory, or its WAL siblings grant group or world access. It
-// runs from PersistentPreRun, so every verb that reads the vault gets
-// the check without threading a warning through each open. A resolve
-// error is left to the verb itself to surface, and a missing vault, the
-// normal case before init, produces no warning.
+// runs from PersistentPreRun, so it fires for whatever verb runs,
+// including ones that never open the vault such as passwd, without
+// threading a warning through each open. A resolve error is left to the
+// verb itself to surface, and a missing vault, the normal case before
+// init, produces no warning.
 func warnLooseVaultPerms(cobraCmd *cobra.Command, opts *options) {
 	path, err := opts.resolveVaultPath()
 	if err != nil {

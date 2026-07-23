@@ -72,8 +72,9 @@ match the identity.
 - A locked or unreadable vault no longer reports as half-created. Open
   reserves the corrupt-vault hint for a missing table or version row,
   and passes operational errors through unwrapped.
-- The loose-permission warning now says a vault others can "access"
-  rather than "read", since the check flags any group or world bit.
+- The loose-permission warning now says group or world can access the
+  vault, rather than read it. The check flags any group or world bit,
+  not only read.
 
 ## [1.2.0] - 2026-07-12
 

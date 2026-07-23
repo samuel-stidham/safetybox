@@ -69,5 +69,7 @@ Priority: low. No security or correctness impact.
   the grammar that `ValidateName`'s comment already gives. Trim one, or
   point the variable comment at the function.
 - `warnLooseVaultPerms` runs from `PersistentPreRun`, so it checks vault
-  permissions on every verb, including ones that never open the vault,
-  like `version`. It is correct but can warn where no vault read happens.
+  permissions for every verb that runs, including ones that never open
+  the vault, like `passwd`. It is correct but warns where no vault read
+  happens. The `--version` flag short-circuits before the check, so it
+  is exempt.
