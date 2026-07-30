@@ -1,7 +1,10 @@
 package vault_test
 
 import (
+	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,7 +21,20 @@ import (
 func fakeSealer(t *testing.T) vault.Sealer {
 	t.Helper()
 
-	return func(address, _, _ string) ([]byte, error) {
+	return func(_, address, _, _ string) ([]byte, error) {
+		return []byte("fake-envelope:" + address), nil
+	}
+}
+
+// recordingSealer is a fake sealer that captures the recipient it was
+// handed, so a test can prove the value came from inside the writing
+// transaction rather than from a read the caller made earlier.
+func recordingSealer(t *testing.T, seen *[]string) vault.Sealer {
+	t.Helper()
+
+	return func(recipient, address, _, _ string) ([]byte, error) {
+		*seen = append(*seen, recipient)
+
 		return []byte("fake-envelope:" + address), nil
 	}
 }
@@ -512,4 +528,164 @@ func TestEntriesPrefixStopsAtSegmentBoundary(t *testing.T) {
 	summaries, err := testVault.List(t.Context(), "projects/myapp")
 	require.NoError(t, err)
 	require.Len(t, summaries, 2)
+}
+
+// TestAppendVersionSealsToTheRecipientInsideTheTransaction pins the fix
+// for a set racing a rekey. The recipient used for sealing must come
+// from inside the writing transaction, never from a lookup the caller
+// made beforehand.
+func TestAppendVersionSealsToTheRecipientInsideTheTransaction(t *testing.T) {
+	testVault := openTestVault(t)
+
+	var seen []string
+
+	_, err := testVault.AppendVersion(t.Context(), "race/target", vault.SetOptions{},
+		recordingSealer(t, &seen))
+	require.NoError(t, err)
+
+	require.Len(t, seen, 1)
+	assert.Equal(t, fakeRecipient, seen[0],
+		"the sealer must receive the recipient the vault currently holds")
+}
+
+// TestAppendVersionAfterRekeyUsesTheRotatedRecipient is the regression
+// itself. Before the fix, set read the recipient before blocking on
+// rekey's write lock, then inserted a version sealed to the recipient
+// rekey had just retired. Rekey's reseal loop had already passed that
+// row, so nothing resealed it and no live identity could open it, while
+// the write still reported success.
+//
+// Sealing here uses only the public recipient, so this write path stays
+// passphrase-free, which is the property the fix had to preserve.
+func TestAppendVersionAfterRekeyUsesTheRotatedRecipient(t *testing.T) {
+	testVault := openTestVault(t)
+
+	const rotated = "age1rotated-fake-recipient"
+
+	_, err := testVault.AppendVersion(t.Context(), "race/first", vault.SetOptions{}, fakeSealer(t))
+	require.NoError(t, err)
+
+	_, err = testVault.Rekey(t.Context(), rotated,
+		func(_ string, _ int64, envelope []byte) ([]byte, error) {
+			return append([]byte("rekeyed:"), envelope...), nil
+		})
+	require.NoError(t, err)
+
+	var seen []string
+
+	_, err = testVault.AppendVersion(t.Context(), "race/second", vault.SetOptions{},
+		recordingSealer(t, &seen))
+	require.NoError(t, err)
+
+	require.Len(t, seen, 1)
+	assert.Equal(t, rotated, seen[0],
+		"a write after a rekey must seal to the rotated recipient, never the retired one")
+	assert.NotEqual(t, fakeRecipient, seen[0],
+		"sealing to the retired recipient leaves a version no live identity can open")
+}
+
+// TestAppendVersionFailsWhenTheRecipientRowIsMissing checks the read
+// added inside the transaction denies rather than sealing to an empty
+// recipient. A control that cannot decide must refuse.
+func TestAppendVersionFailsWhenTheRecipientRowIsMissing(t *testing.T) {
+	testVault := openTestVault(t)
+
+	raw, err := sql.Open("sqlite", "file:"+testVault.Path())
+	require.NoError(t, err)
+
+	_, err = raw.ExecContext(t.Context(), "DELETE FROM vault_meta WHERE key = 'recipient'")
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	var seen []string
+
+	_, err = testVault.AppendVersion(t.Context(), "race/norecipient", vault.SetOptions{},
+		recordingSealer(t, &seen))
+
+	require.Error(t, err, "a missing recipient must fail the write")
+	assert.Empty(t, seen, "the sealer must never run without a recipient")
+}
+
+// stampingSealer embeds the recipient it was given into the fake
+// envelope, so a later pass can tell which recipient each stored version
+// was sealed to.
+func stampingSealer(t *testing.T) vault.Sealer {
+	t.Helper()
+
+	return func(recipient, address, _, _ string) ([]byte, error) {
+		return []byte("fake-envelope:" + recipient + ":" + address), nil
+	}
+}
+
+// TestConcurrentSetAndRekeyLeaveNoVersionOnARetiredRecipient is the
+// invariant the set/rekey race broke: every stored version must either
+// be sealed to the recipient the vault currently holds, or have been
+// resealed by the rekey that rotated it. A version sealed to a retired
+// recipient and missed by the reseal loop is unreadable by any live
+// identity, and the write that produced it reported success.
+func TestConcurrentSetAndRekeyLeaveNoVersionOnARetiredRecipient(t *testing.T) {
+	testVault := openTestVault(t)
+
+	const (
+		rotated = "age1rotated-fake-recipient"
+		writers = 12
+	)
+
+	// Seed a version so the rekey has something to reseal.
+	_, err := testVault.AppendVersion(t.Context(), "race/seed", vault.SetOptions{}, stampingSealer(t))
+	require.NoError(t, err)
+
+	var waitGroup sync.WaitGroup
+
+	errs := make(chan error, writers+1)
+
+	waitGroup.Add(1)
+
+	go func() {
+		defer waitGroup.Done()
+
+		_, rekeyErr := testVault.Rekey(t.Context(), rotated,
+			func(_ string, _ int64, envelope []byte) ([]byte, error) {
+				return append([]byte("rekeyed:"), envelope...), nil
+			})
+		errs <- rekeyErr
+	}()
+
+	for writer := range writers {
+		waitGroup.Add(1)
+
+		go func() {
+			defer waitGroup.Done()
+
+			_, appendErr := testVault.AppendVersion(t.Context(),
+				fmt.Sprintf("race/writer%02d", writer), vault.SetOptions{}, stampingSealer(t))
+			errs <- appendErr
+		}()
+	}
+
+	waitGroup.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err, "every concurrent write must either succeed or serialize cleanly")
+	}
+
+	final, err := testVault.Recipient(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, rotated, final)
+
+	entries, err := testVault.Entries(t.Context(), vault.EntryFilter{})
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+
+	for _, entry := range entries {
+		stored := string(entry.Envelope)
+
+		resealed := strings.HasPrefix(stored, "rekeyed:")
+		onCurrent := strings.Contains(stored, "fake-envelope:"+final+":")
+
+		assert.True(t, resealed || onCurrent,
+			"version %d of %s is sealed to a retired recipient and was not resealed: %s",
+			entry.Version, entry.Name, stored)
+	}
 }

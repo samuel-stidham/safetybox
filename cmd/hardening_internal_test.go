@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
@@ -906,7 +907,7 @@ func pipeWithInput(t *testing.T, input string) *os.File {
 func TestReadLineWipingStopsAtNewline(t *testing.T) {
 	readEnd := pipeWithInput(t, "fake-typed-passphrase-not-real\nnext")
 
-	line, err := readLineWiping(int(readEnd.Fd()))
+	line, err := readLineWiping(int(readEnd.Fd()), new(atomic.Bool))
 
 	require.NoError(t, err)
 	assert.Equal(t, []byte("fake-typed-passphrase-not-real"), line)
@@ -921,7 +922,7 @@ func TestReadLineWipingStopsAtNewline(t *testing.T) {
 func TestReadLineWipingReturnsDataAtEndOfInput(t *testing.T) {
 	readEnd := pipeWithInput(t, "fake-typed-passphrase-not-real")
 
-	line, err := readLineWiping(int(readEnd.Fd()))
+	line, err := readLineWiping(int(readEnd.Fd()), new(atomic.Bool))
 
 	require.NoError(t, err)
 	assert.Equal(t, []byte("fake-typed-passphrase-not-real"), line)
@@ -934,7 +935,7 @@ func TestReadLineWipingSurvivesGrowth(t *testing.T) {
 	long := strings.Repeat("x", 700)
 	readEnd := pipeWithInput(t, long+"\n")
 
-	line, err := readLineWiping(int(readEnd.Fd()))
+	line, err := readLineWiping(int(readEnd.Fd()), new(atomic.Bool))
 
 	require.NoError(t, err)
 	assert.Equal(t, []byte(long), line)

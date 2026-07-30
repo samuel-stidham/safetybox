@@ -16,22 +16,27 @@ func formatTime(t time.Time) string {
 	return t.UTC().Format(timeFormat)
 }
 
-func parseTime(raw string) (time.Time, error) {
+// parseTime reads a stored timestamp. The column name is required so a
+// failure can say which one held the bad value. A bare "parse stored
+// time" told an operator nothing about what to look at.
+func parseTime(raw, column string) (time.Time, error) {
 	parsed, err := time.Parse(timeFormat, raw)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("parse stored time: %w", err)
+		return time.Time{}, fmt.Errorf("%s = %q: %w: %w", column, raw, ErrStoredTimeCorrupt, err)
 	}
 
 	return parsed, nil
 }
 
-// parseNullableTime reports ok=false when the column is NULL.
-func parseNullableTime(raw sql.NullString) (time.Time, bool, error) {
+// parseNullableTime reports ok=false when the column is NULL. A non-NULL
+// empty string is not the same thing, and is treated as corruption,
+// because no safetybox writer produces one.
+func parseNullableTime(raw sql.NullString, column string) (time.Time, bool, error) {
 	if !raw.Valid {
 		return time.Time{}, false, nil
 	}
 
-	parsed, err := parseTime(raw.String)
+	parsed, err := parseTime(raw.String, column)
 	if err != nil {
 		return time.Time{}, false, err
 	}
@@ -51,14 +56,14 @@ type secretRow struct {
 }
 
 func (r secretRow) meta() (SecretMeta, error) {
-	createdAt, err := parseTime(r.createdAt)
+	createdAt, err := parseTime(r.createdAt, "created_at")
 	if err != nil {
-		return SecretMeta{}, err
+		return SecretMeta{}, r.corrupt(err)
 	}
 
-	updatedAt, err := parseTime(r.updatedAt)
+	updatedAt, err := parseTime(r.updatedAt, "updated_at")
 	if err != nil {
-		return SecretMeta{}, err
+		return SecretMeta{}, r.corrupt(err)
 	}
 
 	meta := SecretMeta{
@@ -67,14 +72,14 @@ func (r secretRow) meta() (SecretMeta, error) {
 		UpdatedAt: updatedAt,
 	}
 
-	if deletedAt, ok, err := parseNullableTime(r.deletedAt); err != nil {
-		return SecretMeta{}, err
+	if deletedAt, ok, err := parseNullableTime(r.deletedAt, "deleted_at"); err != nil {
+		return SecretMeta{}, r.corrupt(err)
 	} else if ok {
 		meta.DeletedAt = &deletedAt
 	}
 
-	if expiresAt, ok, err := parseNullableTime(r.expiresAt); err != nil {
-		return SecretMeta{}, err
+	if expiresAt, ok, err := parseNullableTime(r.expiresAt, "expires_at"); err != nil {
+		return SecretMeta{}, r.corrupt(err)
 	} else if ok {
 		meta.ExpiresAt = &expiresAt
 	}
@@ -85,6 +90,13 @@ func (r secretRow) meta() (SecretMeta, error) {
 	}
 
 	return meta, nil
+}
+
+// corrupt names the secret whose row would not parse. Without the name
+// an operator sees only that some timestamp was bad, with no way to tell
+// which of possibly hundreds of secrets was edited.
+func (r secretRow) corrupt(err error) error {
+	return fmt.Errorf("secret %q: %w", r.name, err)
 }
 
 type querier interface {
@@ -184,7 +196,8 @@ func (v *Vault) AppendVersion(
 // seals the envelope to that address with the bound metadata, and
 // inserts the row.
 func sealAndInsertVersion(
-	ctx context.Context, txn *sql.Tx, secretID int64, name, envName, expiresAt string, now time.Time, seal Sealer,
+	ctx context.Context, txn *sql.Tx, secretID int64,
+	name, envName, expiresAt string, now time.Time, seal Sealer,
 ) (int64, error) {
 	var nextVersion int64
 
@@ -195,7 +208,22 @@ func sealAndInsertVersion(
 		return 0, fmt.Errorf("next version for %s: %w", name, err)
 	}
 
-	envelope, err := seal(CanonicalAddress(name, nextVersion), envName, expiresAt)
+	// Read the recipient here, inside the writing transaction, rather
+	// than taking one the caller looked up earlier. _txlock=immediate
+	// means this transaction already holds the write lock, so no rekey
+	// can rotate the recipient between this read and the commit.
+	//
+	// A caller that read it first could block on rekey's lock, then
+	// insert a version sealed to the recipient rekey had just retired.
+	// Rekey's reseal loop had already passed, so nothing would reseal the
+	// new row and no live identity could open it. The write reported
+	// success and the newest version was silently unreadable.
+	recipient, err := txMetaValue(ctx, txn, metaKeyRecipient)
+	if err != nil {
+		return 0, err
+	}
+
+	envelope, err := seal(recipient, CanonicalAddress(name, nextVersion), envName, expiresAt)
 	if err != nil {
 		return 0, fmt.Errorf("seal %s: %w", name, err)
 	}
@@ -324,9 +352,9 @@ func (v *Vault) NewestEnabled(ctx context.Context, name string) (*Resolved, erro
 		return nil, fmt.Errorf("newest version of %s: %w", name, err)
 	}
 
-	created, err := parseTime(createdAt)
+	created, err := parseTime(createdAt, "secret_version.created_at")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("secret %q: %w", name, err)
 	}
 
 	return &Resolved{
@@ -372,9 +400,9 @@ func (v *Vault) Meta(ctx context.Context, name string) (SecretMeta, []VersionMet
 			return SecretMeta{}, nil, fmt.Errorf("scan version of %s: %w", name, err)
 		}
 
-		created, err := parseTime(createdAt)
+		created, err := parseTime(createdAt, "secret_version.created_at")
 		if err != nil {
-			return SecretMeta{}, nil, err
+			return SecretMeta{}, nil, fmt.Errorf("secret %q version %d: %w", name, number, err)
 		}
 
 		versions = append(versions, VersionMeta{Number: number, State: State(state), CreatedAt: created})
@@ -681,8 +709,8 @@ func (v *Vault) Entries(ctx context.Context, filter EntryFilter) ([]Entry, error
 		entry.EnvName = envName.String
 		entry.EnvNameValid = envName.Valid
 
-		if expiry, ok, err := parseNullableTime(expiresAt); err != nil {
-			return nil, err
+		if expiry, ok, err := parseNullableTime(expiresAt, "expires_at"); err != nil {
+			return nil, fmt.Errorf("secret %q: %w", entry.Name, err)
 		} else if ok {
 			entry.ExpiresAt = &expiry
 		}

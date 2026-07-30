@@ -72,7 +72,12 @@ func acquireMigrateLock(vaultPath string) (func(), error) {
 func flockExclusiveNB(lockFilePath, busyMessage string, missingParent error) (func(), error) {
 	lockFilePath = filepath.Clean(lockFilePath)
 
-	file, err := os.OpenFile(lockFilePath, os.O_RDWR|os.O_CREATE, lockFileMode)
+	// O_NOFOLLOW refuses a symlink planted at the lock path, which would
+	// otherwise redirect the file this creates. Planting one needs write
+	// access to the 0700 vault or config directory, so this is hardening
+	// rather than a fix for a reachable hole. A symlink here reports
+	// ELOOP, which falls through to the generic open error below.
+	file, err := os.OpenFile(lockFilePath, os.O_RDWR|os.O_CREATE|unix.O_NOFOLLOW, lockFileMode)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, missingParent
@@ -99,6 +104,27 @@ func flockExclusiveNB(lockFilePath, busyMessage string, missingParent error) (fu
 		_ = unix.Flock(int(file.Fd()), unix.LOCK_UN)
 		_ = file.Close()
 	}, nil
+}
+
+// requireVaultFile reports ErrVaultNotFound when no regular file sits at
+// vaultPath. Verbs that take an advisory lock before opening the vault
+// call this first, so a missing vault does not leave a stray lock file
+// behind in a directory that happens to exist.
+func requireVaultFile(vaultPath string) error {
+	info, err := os.Stat(vaultPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("open %s: %w", vaultPath, vault.ErrVaultNotFound)
+		}
+
+		return fmt.Errorf("stat %s: %w", vaultPath, err)
+	}
+
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("open %s: %w", vaultPath, vault.ErrVaultCorrupt)
+	}
+
+	return nil
 }
 
 // identityLockPath derives the identity file's advisory lock path.
@@ -273,40 +299,49 @@ func verifyRecipient(expectedRecipient string, key *age.X25519Identity) error {
 // so one such secret must not take down the whole run. A decrypt or
 // framing failure always fails loud, since that signals corruption or a
 // downgrade attempt, not a benign metadata edit.
+//
+// It returns the entries it skipped. Skipping alone is not fail-safe: a
+// consumer that already holds a value under the same env name would keep
+// it and never learn the real one was withheld. Callers must act on this
+// list, by clearing the variable rather than leaving a stale one behind.
 func forEachDecrypted(cobraCmd *cobra.Command, opts *options, expectedRecipient string, entries []vault.Entry,
 	explicit bool, visit func(entry vault.Entry, expired bool, value secret.Value) error,
-) error {
+) ([]vault.Entry, error) {
 	key, cleanup, err := loadIdentity(cobraCmd, opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	defer cleanup()
 
 	if err := verifyRecipient(expectedRecipient, key); err != nil {
-		return err
+		return nil, err
 	}
 
 	now := nowUTC()
+
+	var skipped []vault.Entry
 
 	for _, entry := range entries {
 		address := vault.CanonicalAddress(entry.Name, entry.Version)
 
 		value, bound, err := envelope.Open(key, address, entry.Envelope)
 		if err != nil {
-			return fmt.Errorf("open %s: %w", entry.Name, userHint(err))
+			return nil, fmt.Errorf("open %q: %w", entry.Name, userHint(err))
 		}
 
 		if err := verifyBound(entry.EnvNameValid, entry.EnvName, entry.ExpiresAt, bound); err != nil {
 			value.Destroy()
 
 			if explicit {
-				return fmt.Errorf("verify %s: %w", entry.Name, err)
+				return nil, fmt.Errorf("verify %q: %w", entry.Name, err)
 			}
 
 			printStderr(cobraCmd, fmt.Sprintf(
-				"warning: secret %s metadata does not match the sealed value, skipped\n", entry.Name,
+				"warning: secret %q metadata does not match the sealed value, skipped\n", entry.Name,
 			))
+
+			skipped = append(skipped, entry)
 
 			continue
 		}
@@ -324,11 +359,11 @@ func forEachDecrypted(cobraCmd *cobra.Command, opts *options, expectedRecipient 
 		value.Destroy()
 
 		if visitErr != nil {
-			return visitErr
+			return nil, visitErr
 		}
 	}
 
-	return nil
+	return skipped, nil
 }
 
 // resolved is a decrypted secret with its metadata.
@@ -378,7 +413,7 @@ func resolveNewest(cobraCmd *cobra.Command, opts *options, name string) (*resolv
 
 	value, bound, err := envelope.Open(key, address, newest.Envelope)
 	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", name, userHint(err))
+		return nil, fmt.Errorf("open %q: %w", name, userHint(err))
 	}
 
 	envNameValid := newest.Secret.EnvName != nil
@@ -391,7 +426,7 @@ func resolveNewest(cobraCmd *cobra.Command, opts *options, name string) (*resolv
 	if err := verifyBound(envNameValid, envName, newest.Secret.ExpiresAt, bound); err != nil {
 		value.Destroy()
 
-		return nil, fmt.Errorf("verify %s: %w", name, err)
+		return nil, fmt.Errorf("verify %q: %w", name, err)
 	}
 
 	if newest.Secret.Expired(nowUTC()) {

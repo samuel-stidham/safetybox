@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/samuel-stidham/safetybox/v3/internal/vault"
@@ -248,4 +249,64 @@ func TestSchemaRejectsInvalidState(t *testing.T) {
 		`INSERT INTO secret_version (secret_id, version_number, state, created_at)
 		 VALUES (1, 1, 'bogus', '2026-01-01')`)
 	require.Error(t, err, "state CHECK constraint must reject unknown states")
+}
+
+// TestCreateAndOpenSurviveURISpecialCharactersInPath pins the fix for a
+// vault path containing '#' or '?'. SQLite opens the DSN with
+// SQLITE_OPEN_URI, so an unescaped path once truncated the filename and
+// the real database landed somewhere else at the process umask, while
+// the 0600 file Create had made stayed a zero-byte decoy.
+func TestCreateAndOpenSurviveURISpecialCharactersInPath(t *testing.T) {
+	// The subtest names stay plain on purpose. t.TempDir builds its
+	// directory from the test name, so a '#' there would put the
+	// truncation point outside the tree this test controls, and a stray
+	// file from a failing run would linger in the system temp directory.
+	for _, testCase := range []struct {
+		name      string
+		directory string
+	}{
+		{name: "hash", directory: "my#box"},
+		{name: "question", directory: "why?"},
+		{name: "percent", directory: "100%"},
+		{name: "all_three", directory: "all#of?these%"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, testCase.directory, "vault.db")
+
+			require.NoError(t, vault.Create(t.Context(), path, fakeRecipient))
+
+			// The database must be the file Create made, not a sibling
+			// created later by SQLite at a truncated path.
+			fileInfo, err := os.Stat(path)
+			require.NoError(t, err)
+			assert.NotZero(t, fileInfo.Size(),
+				"the vault at this exact path must hold the database, not be an empty decoy")
+			assert.Equal(t, os.FileMode(0o600), fileInfo.Mode().Perm(),
+				"the real database must keep 0600, never fall back to the umask")
+
+			opened, err := vault.Open(t.Context(), path)
+			require.NoError(t, err)
+
+			t.Cleanup(func() { assert.NoError(t, opened.Close()) })
+
+			recipient, err := opened.Recipient(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, fakeRecipient, recipient,
+				"the reopened vault must be the one Create initialized")
+
+			// Nothing may appear at the path SQLite would have used had
+			// the '#' or '?' been left unescaped.
+			for _, terminator := range []string{"#", "?"} {
+				truncated, _, found := strings.Cut(path, terminator)
+				if !found {
+					continue
+				}
+
+				_, err := os.Stat(truncated)
+				assert.ErrorIs(t, err, os.ErrNotExist,
+					"no stray database may appear at the truncated path %q", truncated)
+			}
+		})
+	}
 }

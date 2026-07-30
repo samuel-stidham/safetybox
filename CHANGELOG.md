@@ -4,6 +4,104 @@ All notable changes to safetybox are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Security
+
+- A terminating signal at a no-echo prompt no longer echoes what you
+  type. `signal.Notify` suppresses the default termination for every
+  signal it registers, and the handler only restored the terminal, so a
+  `SIGTERM` turned echo back on while the prompt kept reading. The rest
+  of the secret or passphrase went to the terminal and the run still
+  exited 0. The handler now restores the terminal and exits through
+  `memguard.SafeExit`. `SIGHUP` and `SIGQUIT` join the set, so neither
+  leaves a shell with echo off.
+- A secret can no longer carry an env name that decides what code runs.
+  `PATH`, `IFS`, `ENV`, `BASH_ENV`, `SHELL`, `SHELLOPTS`, `BASHOPTS`,
+  `CDPATH`, `GLOBIGNORE`, `PROMPT_COMMAND`, `PS4`, and anything starting
+  with `LD_` or `DYLD_` are refused by `set` and refused again by `exec`
+  and `reveal` at injection. A row can be forged without the passphrase,
+  because sealing needs only the stored public recipient, so the second
+  check is the one that matters. Injecting `PATH` or `LD_PRELOAD` meant
+  code execution in every `exec` child and in any shell sourcing
+  `reveal --format` output.
+- A vault path containing `#` or `?` no longer relocates the database.
+  The DSN concatenated the path, and SQLite opens it with
+  `SQLITE_OPEN_URI`, so it ended the filename at the first `#` and began
+  the query at the first `?`. The real database was created elsewhere at
+  the process umask, world readable, while the 0600 file safetybox made
+  stayed an empty decoy that `LoosePermissions` then reported clean. The
+  same parse silently dropped `_txlock=immediate`, so concurrent writes
+  failed with raw `SQLITE_BUSY`. The path is now escaped into the URI.
+- `exec` no longer parses flags after the child command. A trailing
+  `--vault`, `--identity`, or `--passphrase-file` bound to safetybox
+  instead of the child, so a wrapper shaped like
+  `safetybox exec cmd "$@"` let its caller choose which vault was read.
+  The child also lost those arguments.
+- A `set` racing a `rekey` no longer seals to the retired recipient.
+  The recipient was read before the write transaction, so a `set` that
+  blocked on rekey's lock inserted a version sealed to the key rekey had
+  just replaced. Rekey's reseal loop had already passed that row, so no
+  live identity could open it and the write reported success. The
+  recipient is now read inside the writing transaction. Writing a secret
+  still never asks for the passphrase.
+- A skipped secret no longer leaves a stale value behind. A batch verb
+  skips a secret whose metadata no longer matches its sealed value,
+  which the docs called fail-safe. It was not: `exec` starts from the
+  parent environment, so a variable already set stayed visible to the
+  child, and a sourcing shell kept its own value. `exec` now removes the
+  variable, and the shell formats emit `unset NAME` or
+  `set --erase NAME`. A name another secret legitimately supplies is
+  left alone.
+
+### Fixed
+
+- `migrate` now repairs a value left in the old format, closing #10. A
+  2.x binary racing a migration commits a version 1 frame the moment the
+  migration lands, because it checks the format only when it opens the
+  vault and takes no part in the migrate lock. Every later read of that
+  value failed with a tamper-shaped error, and a second `migrate`
+  refused because the vault was already current, so nothing could fix it
+  short of retyping the secret. `migrate` now rescans an already-current
+  vault and re-seals any old frame it finds. Only a genuine version 1
+  frame is repaired, so corruption still fails loudly.
+- A read of such a value now says what happened, the other half of #10.
+  The refusal named no cause and read like tampering. It now reports
+  that an older safetybox most likely wrote the value, and points at
+  `migrate`.
+- A timestamp column holding a value no safetybox writer produces now
+  names the secret and the column, closing #13. An `expires_at` flipped
+  to an empty string aborted reads with a bare "parse stored time", so
+  an operator could not tell which row was edited. The whole-batch
+  failure is unchanged, because corruption must not be quietly skipped.
+- Addresses and secret names are quoted in errors and warnings, closing
+  #14. A name carrying a newline rendered as its own output line, which
+  a vault-write edit could use to fake a warning. All 14 sites in the
+  envelope package and the cmd layer's name interpolations now escape.
+- The advisory lock files are opened with `O_NOFOLLOW`, the first half
+  of #12, so a symlink planted at the `.lock` path cannot redirect the
+  file safetybox creates.
+- `migrate` refuses a missing vault before taking its lock, the second
+  half of #12. Locking first left a stray empty `vault.db.lock` that
+  nothing removed. Deleting it afterwards is not an option, since
+  removing lock files reopens the fresh-inode race the design avoids.
+
+### Changed
+
+- `docs/security.md` no longer claims the identity loader refuses a
+  loose file "the way ssh refuses a loose private key". The check reads
+  mode bits, and a POSIX or NFSv4 ACL can grant another user read access
+  while the mode still reads 0600. The narrower claim is now stated,
+  along with how to check for it.
+- `docs/security.md` documents the advisory locks' one known limit,
+  which is #11. The lock is keyed by path, so a symlink, a relative
+  path, a trailing slash, and a case variant all converge, while two
+  hardlinks to one file derive two locks and both runs proceed. Keying
+  to the inode would mean flocking the database and mixing flock with
+  SQLite's own POSIX locks, a platform risk not worth taking for a
+  single-user tool where the aliasing is self-inflicted. Tests now pin
+  both the convergence and the limit.
+
 ## [3.0.0] - 2026-07-23
 
 A format release. It seals each secret's env name and expiry into the

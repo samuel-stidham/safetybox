@@ -14,6 +14,13 @@ var (
 	// ErrFormatVersion means the vault was written by an
 	// incompatible format version.
 	ErrFormatVersion = errors.New("unsupported vault format version")
+	// ErrStoredTimeCorrupt means a timestamp column holds a value no
+	// safetybox writer produces, such as an empty string or arbitrary
+	// text. A vault-write edit is the likely cause. A read fails whole
+	// rather than skipping the one secret, because real corruption must
+	// not be quietly tolerated, and the error names the secret and the
+	// column so an operator can see what was edited.
+	ErrStoredTimeCorrupt = errors.New("stored timestamp is not valid, the vault may have been edited")
 	// ErrSecretNotFound means no secret has the given name.
 	ErrSecretNotFound = errors.New("secret not found")
 	// ErrVersionNotFound means the secret has no such version.
@@ -37,6 +44,11 @@ var (
 	// vault that is already at the current format, so there is nothing
 	// to do. A re-run after a crash reaches this cleanly.
 	ErrAlreadyCurrentFormat = errors.New("vault is already at the current format")
+	// ErrEnvelopeCurrent tells the legacy repair pass that a row already
+	// holds a current-format envelope and needs no work. A resealer
+	// returns it in place of an envelope, and the pass skips that row
+	// rather than treating it as a failure.
+	ErrEnvelopeCurrent = errors.New("envelope is already in the current format")
 	// ErrRecipientMismatch means the vault's stored recipient does not
 	// match the identity presented to migrate, so migrate refuses before
 	// re-sealing every envelope, the way the read verbs refuse.
