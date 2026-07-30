@@ -49,13 +49,22 @@ needs the plaintext value, which a vault-write attacker does not have.
 So they cannot make the column and the sealed value agree while keeping
 your value.
 
-The limit is inherent to keyless writes. The recipient is a public key,
-so an attacker can seal a chosen plaintext with a matching env name and
+The limit is inherent to keyless writes. Writing a secret never asks for
+the passphrase, which is deliberate. The recipient is a public key, so
+an attacker can seal a chosen plaintext with a matching env name and
 expiry, then overwrite a row. That forged envelope passes every check.
-But it holds the attacker's value, not yours, so it is a substitution
-you would notice, not a stealthy metadata edit. Version state and
-soft-deletion are not bound, because the operations that change them,
-disable, delete, and purge, hold no plaintext to re-seal.
+It holds the attacker's value rather than yours, so it is a substitution
+you would notice. Version state and soft-deletion are not bound, because
+the operations that change them, disable, delete, and purge, hold no
+plaintext to re-seal.
+
+One class of forged env name goes further than substitution, so it is
+refused by name. A secret whose env name is `PATH`, `IFS`, `LD_PRELOAD`,
+or another variable a shell or the dynamic loader reads to decide what
+code to run would execute attacker code in every `exec` child, and in
+any shell that sources `reveal --format sh` output. `set` refuses these
+names. `exec` and `reveal` refuse them again at injection, because a row
+can be forged or predate the check.
 
 Deleting version rows is the cheaper version of that gap. An attacker
 with vault write access can remove the newest `secret_version` rows so
@@ -73,8 +82,15 @@ active older version was sealed with the old value while the column
 holds the new one. An explicit read, `get` or `reveal <name>`, refuses
 that state until you re-set the secret to reconcile it. A batch verb,
 `exec` or a `reveal` filter, skips that one secret with a warning and
-delivers the rest. One stale secret never denies a whole run. It is rare
-and fails safe.
+delivers the rest. One stale secret never denies a whole run.
+
+Skipping alone would not be safe, so the skipped variable is also
+cleared. A consumer that already held a value under that env name would
+otherwise keep it and never learn the real secret was withheld. `exec`
+removes the variable from the child's environment. `reveal --format sh`
+emits `unset NAME`, and the fish format emits `set --erase NAME`, so a
+sourcing shell drops its own value too. Absent is a state the caller can
+test for. Stale is not.
 
 The stored recipient is the attacker's other target. A write to
 `vault_meta` could point new secrets at a key the attacker controls.
@@ -88,10 +104,15 @@ identity by design, so this is detection on read, not prevention.
 The vault file is created 0600 with WAL journaling, and SQLite gives
 the `-wal` and `-shm` siblings the same mode. The identity file is
 0600 inside a 0700 directory. Loading refuses an identity file, or a
-containing directory, with group or world permission bits, the way
-ssh refuses a loose private key. A regular file passed to
-`--passphrase-file` is held to the same check. A pipe or process
-substitution is a transient stream and is allowed.
+containing directory, whose mode carries group or world permission bits.
+A regular file passed to `--passphrase-file` is held to the same check.
+A pipe or process substitution is a transient stream and is allowed.
+
+That check reads mode bits only. A POSIX or NFSv4 ACL can grant another
+user read access while the mode still reads 0600, and the loader does
+not see it. So this is not the full guarantee ssh gives a private key.
+If your platform or management tooling applies ACLs, verify the identity
+file yourself with `ls -le` on macOS or `getfacl` on Linux.
 
 The vault gets a warning rather than a refusal. On every run safetybox
 checks the vault file, its directory, and the `-wal` and `-shm`
@@ -130,6 +151,27 @@ their whole run, so two rotations can never interleave and delete
 each other's staged key. A commit that errors after its record became
 durable is treated as ambiguous. rekey then keeps both key files and
 says to test which one opens the vault before deleting either.
+
+Those locks are keyed by path, and that has one known limit. The lock
+file is a `.lock` sibling of the resolved target, so a symlink,
+a relative path, a trailing slash, and a case-variant spelling all
+converge on one lock and serialize correctly. Two hardlinks to the
+same file do not. Each hardlink is its own path, so each derives its
+own lock file, and both runs acquire a lock at the same time.
+
+The consequence is bounded rather than dangerous. Two migrates still
+serialize on SQLite's own write lock, and the loser gets a clean
+already-current result or, past the busy timeout, the raw busy error
+the lock exists to dress up. The migration itself is one immediate
+transaction, so no partial state is reachable. For rekey and passwd
+the stakes are higher, since the lock is what protects the staged key,
+so avoid running those against a hardlinked spelling of the identity.
+
+Keying the lock to the inode would mean flocking the database itself,
+and mixing flock with SQLite's own POSIX locks carries platform risk
+that is not worth taking for a single-user tool where the aliasing is
+self-inflicted. The limit is documented here rather than worked
+around.
 
 purge erases envelopes but keeps rows, so history shows a version
 existed without any way to recover its value. The vault runs with

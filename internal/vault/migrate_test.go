@@ -72,7 +72,7 @@ func TestConcurrentMigrateLoserGetsAlreadyCurrent(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = opened.AppendVersion(t.Context(), "api/one", vault.SetOptions{},
-		func(address, _, _ string) ([]byte, error) {
+		func(_, address, _, _ string) ([]byte, error) {
 			return []byte("legacy:" + address), nil
 		})
 	require.NoError(t, err)

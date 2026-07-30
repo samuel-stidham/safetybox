@@ -11,6 +11,7 @@ import (
 	"github.com/samuel-stidham/safetybox/v3/internal/secret"
 	"github.com/samuel-stidham/safetybox/v3/internal/vault"
 
+	"filippo.io/age"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -77,13 +78,17 @@ func runSet(cobraCmd *cobra.Command, opts *options, name string, flags setFlags)
 
 	defer func() { _ = openedVault.Close() }()
 
-	recipient, err := storedRecipient(ctx, openedVault)
-	if err != nil {
-		return err
-	}
-
+	// The recipient arrives from inside the writing transaction, so it
+	// cannot be one a concurrent rekey has already retired. Sealing needs
+	// the public recipient alone, which is why writing a secret never
+	// asks for the passphrase.
 	result, err := openedVault.AppendVersion(ctx, name, setOpts,
-		func(address, envName, expiresAt string) ([]byte, error) {
+		func(storedKey, address, envName, expiresAt string) ([]byte, error) {
+			recipient, err := age.ParseX25519Recipient(storedKey)
+			if err != nil {
+				return nil, fmt.Errorf("stored recipient does not parse: %w", err)
+			}
+
 			plaintext := secret.New(value)
 			defer plaintext.Destroy()
 
@@ -117,6 +122,17 @@ func setOptionsFromFlags(cobraCmd *cobra.Command, flags setFlags) (vault.SetOpti
 		// empty value is the signal to clear the env name.
 		if flags.envName != "" && !isShellIdentifier(flags.envName) {
 			return vault.SetOptions{}, fmt.Errorf("--env-name %q is not a valid shell identifier", flags.envName)
+		}
+
+		// A valid identifier is not automatically a safe one. PATH,
+		// LD_PRELOAD and their kin decide what code the child runs, so a
+		// secret may not carry them. Refuse here, where the message can
+		// reach the person typing it.
+		if isReservedEnvName(flags.envName) {
+			return vault.SetOptions{}, fmt.Errorf(
+				"--env-name %q is reserved: a shell or the dynamic loader reads it to decide what code to run, "+
+					"so a secret cannot supply it", flags.envName,
+			)
 		}
 
 		setOpts.EnvName = &flags.envName

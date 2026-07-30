@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	osexec "os/exec"
+	"strings"
 	"syscall"
 
 	"github.com/samuel-stidham/safetybox/v3/internal/secret"
@@ -20,18 +21,31 @@ import (
 const signalExitBase = 128
 
 func newExecCmd(opts *options) *cobra.Command {
-	return &cobra.Command{
+	execCmd := &cobra.Command{
 		Use:   "exec -- <command> [args...]",
 		Short: "Run a command with secrets injected into its environment",
 		Long: "exec resolves every secret that has an env name, decrypts its " +
 			"newest enabled version, and runs the command with those " +
 			"variables added to the environment. The child's exit code is " +
-			"propagated.",
+			"propagated.\n\n" +
+			"safetybox's own flags must come before the command. Everything " +
+			"from the command name onward belongs to the child, so a child " +
+			"flag never changes which vault or identity safetybox reads.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
 			return runExec(cobraCmd, opts, args)
 		},
 	}
+
+	// Stop parsing flags at the command name. Interspersed parsing let a
+	// flag after the child command bind to safetybox instead, so
+	// "safetybox exec sh -c ... --vault EVIL" redirected the vault, the
+	// identity, and the passphrase file, and the child silently lost
+	// those arguments. A wrapper shaped like `safetybox exec cmd "$@"`
+	// handed that control to whoever supplied "$@".
+	execCmd.Flags().SetInterspersed(false)
+
+	return execCmd
 }
 
 func runExec(cobraCmd *cobra.Command, opts *options, args []string) error {
@@ -128,34 +142,17 @@ func buildSecretEnv(cobraCmd *cobra.Command, opts *options) ([]string, error) {
 	// exec always selects a batch by env-name filter, never a single
 	// explicit name, so a mismatching secret is skipped with a warning
 	// rather than aborting the run and denying every variable to the child.
-	err = forEachDecrypted(cobraCmd, opts, recipient, entries, false,
+	skipped, err := forEachDecrypted(cobraCmd, opts, recipient, entries, false,
 		func(entry vault.Entry, _ bool, value secret.Value) error {
-			if !isShellIdentifier(entry.EnvName) {
-				printStderr(cobraCmd, fmt.Sprintf(
-					"warning: secret %s env name %q is not a valid variable name, skipped\n",
-					entry.Name, entry.EnvName,
-				))
-
-				return nil
-			}
-
-			// A NUL byte in the value makes os/exec reject the whole
-			// environment, which would fail every command exec runs. Skip
-			// the offending secret with a warning that names it, the way
-			// reveal --format handles the same value, rather than letting
-			// one binary secret deny the verb.
-			if bytes.IndexByte(value.Expose(), 0) >= 0 {
-				printStderr(cobraCmd, fmt.Sprintf(
-					"warning: secret %s value contains a NUL byte, which an environment variable cannot hold, skipped\n",
-					entry.Name,
-				))
+			if reason := envInjectable(entry, value); reason != "" {
+				printStderr(cobraCmd, fmt.Sprintf("warning: secret %q %s, skipped\n", entry.Name, reason))
 
 				return nil
 			}
 
 			if previous, collided := sourceOf[entry.EnvName]; collided {
 				printStderr(cobraCmd, fmt.Sprintf(
-					"warning: env name %s from %s overrides the value from %s\n",
+					"warning: env name %s from %q overrides the value from %q\n",
 					entry.EnvName, entry.Name, previous,
 				))
 			}
@@ -170,5 +167,90 @@ func buildSecretEnv(cobraCmd *cobra.Command, opts *options) ([]string, error) {
 		return nil, err
 	}
 
-	return env, nil
+	return withoutSkipped(cobraCmd, env, skipped, sourceOf), nil
+}
+
+// envInjectable explains why an entry cannot become a child environment
+// variable. An empty reason means it can. It mirrors reveal's
+// shellUsable, so the two batch verbs refuse the same things for the
+// same stated reasons.
+func envInjectable(entry vault.Entry, value secret.Value) string {
+	switch {
+	case !isShellIdentifier(entry.EnvName):
+		return fmt.Sprintf("env name %q is not a valid variable name", entry.EnvName)
+	case isReservedEnvName(entry.EnvName):
+		// set refuses these names, but a row can predate that check or be
+		// forged: sealing an envelope needs only the recipient, which the
+		// vault stores in the clear. Skipping leaves the child with the real
+		// PATH it inherited instead of one the vault supplied.
+		return fmt.Sprintf("env name %q is reserved, so a secret must not supply it", entry.EnvName)
+	case bytes.IndexByte(value.Expose(), 0) >= 0:
+		// A NUL byte in the value makes os/exec reject the whole
+		// environment, which would fail every command exec runs. Skipping
+		// the one secret keeps a binary value from denying the verb.
+		return "value contains a NUL byte, which an environment variable cannot hold"
+	default:
+		return ""
+	}
+}
+
+// withoutSkipped removes every variable a skipped secret was supposed to
+// supply, so the child cannot read a stale value under that name.
+//
+// Skipping used to be described as fail-safe, and on its own it is not.
+// buildSecretEnv starts from os.Environ, so a variable the parent already
+// held stayed visible to the child after safetybox declined to deliver
+// the real secret. The child could not tell the difference, and the run
+// still exited 0. Absent is a state the child can detect. Stale is not.
+//
+// A skipped secret whose env name another secret legitimately supplied is
+// left alone, since that name is not stale.
+func withoutSkipped(
+	cobraCmd *cobra.Command, env []string, skipped []vault.Entry, delivered map[string]string,
+) []string {
+	toClear := staleEnvNames(skipped, delivered)
+	if len(toClear) == 0 {
+		return env
+	}
+
+	kept := make([]string, 0, len(env))
+
+	for _, assignment := range env {
+		name, _, _ := strings.Cut(assignment, "=")
+
+		if _, drop := toClear[name]; drop {
+			continue
+		}
+
+		kept = append(kept, assignment)
+	}
+
+	for name := range toClear {
+		printStderr(cobraCmd, fmt.Sprintf(
+			"warning: %s was cleared from the environment, so the child cannot read a stale value\n", name,
+		))
+	}
+
+	return kept
+}
+
+// staleEnvNames collects the variable names a skipped secret was meant to
+// supply and nothing else did. A name another secret legitimately
+// supplied is current rather than stale, so it stays.
+func staleEnvNames(skipped []vault.Entry, delivered map[string]string) map[string]struct{} {
+	stale := make(map[string]struct{}, len(skipped))
+
+	for _, entry := range skipped {
+		if entry.EnvName == "" || !isShellIdentifier(entry.EnvName) {
+			continue
+		}
+
+		if _, supplied := delivered[entry.EnvName]; supplied {
+			continue
+		}
+
+		stale[entry.EnvName] = struct{}{}
+	}
+
+	return stale
 }

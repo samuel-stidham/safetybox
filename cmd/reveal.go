@@ -116,10 +116,12 @@ func runReveal(cobraCmd *cobra.Command, opts *options, names []string, flags rev
 	// an empty result costs no passphrase prompt and no KDF.
 	outputs := make([]revealOutput, 0)
 
+	var skipped []vault.Entry
+
 	if len(entries) > 0 {
 		// Explicit names fail loud on a metadata mismatch, matching get.
 		// A filter selection skips the mismatching secret and warns.
-		outputs, err = decryptRevealEntries(cobraCmd, opts, recipient, entries, len(names) > 0)
+		outputs, skipped, err = decryptRevealEntries(cobraCmd, opts, recipient, entries, len(names) > 0)
 		if err != nil {
 			return err
 		}
@@ -128,7 +130,7 @@ func runReveal(cobraCmd *cobra.Command, opts *options, names []string, flags rev
 	if flags.format != formatJSON {
 		// Explicitly named secrets fail loudly when unusable, the same
 		// contract a missing name gets. Filter selections skip and warn.
-		return printShellAssignments(cobraCmd, outputs, flags.format, len(names) > 0)
+		return printShellAssignments(cobraCmd, outputs, skipped, flags.format, len(names) > 0)
 	}
 
 	encodeNonUTF8(cobraCmd, outputs)
@@ -207,10 +209,10 @@ func entriesByName(ctx context.Context, openedVault *vault.Vault, names []string
 // recipient is verified against the identity before anything decrypts.
 func decryptRevealEntries(
 	cobraCmd *cobra.Command, opts *options, recipient string, entries []vault.Entry, explicit bool,
-) ([]revealOutput, error) {
+) ([]revealOutput, []vault.Entry, error) {
 	outputs := make([]revealOutput, 0, len(entries))
 
-	err := forEachDecrypted(cobraCmd, opts, recipient, entries, explicit,
+	skipped, err := forEachDecrypted(cobraCmd, opts, recipient, entries, explicit,
 		func(entry vault.Entry, expired bool, value secret.Value) error {
 			output := revealOutput{
 				Name:      entry.Name,
@@ -231,10 +233,10 @@ func decryptRevealEntries(
 			return nil
 		})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return outputs, nil
+	return outputs, skipped, nil
 }
 
 // shellUsable explains why an output cannot become an assignment
@@ -245,6 +247,11 @@ func shellUsable(output revealOutput) string {
 		return "has no env name"
 	case !isShellIdentifier(*output.EnvName):
 		return fmt.Sprintf("env name %q is not a shell identifier", *output.EnvName)
+	case isReservedEnvName(*output.EnvName):
+		// Emitting this would let a sourced batch rewrite PATH or preload a
+		// library into the sourcing shell. Leaving the line out keeps the
+		// shell's own value.
+		return fmt.Sprintf("env name %q is reserved, so a shell must not take it from a secret", *output.EnvName)
 	case strings.ContainsRune(output.Value, 0):
 		return "value contains a NUL byte, which a shell variable cannot hold"
 	default:
@@ -258,13 +265,15 @@ func shellUsable(output revealOutput) string {
 // selections skip with a warning on stderr, so a sourced batch never
 // silently drops a secret. Duplicate env names warn because the last
 // assignment silently wins in the sourcing shell.
-func printShellAssignments(cobraCmd *cobra.Command, outputs []revealOutput, format string, explicit bool) error {
+func printShellAssignments(
+	cobraCmd *cobra.Command, outputs []revealOutput, skipped []vault.Entry, format string, explicit bool,
+) error {
 	if explicit {
 		var unusable []string
 
 		for _, output := range outputs {
 			if reason := shellUsable(output); reason != "" {
-				unusable = append(unusable, fmt.Sprintf("%s %s", output.Name, reason))
+				unusable = append(unusable, fmt.Sprintf("%q %s", output.Name, reason))
 			}
 		}
 
@@ -278,14 +287,14 @@ func printShellAssignments(cobraCmd *cobra.Command, outputs []revealOutput, form
 
 	for _, output := range outputs {
 		if reason := shellUsable(output); reason != "" {
-			printStderr(cobraCmd, fmt.Sprintf("warning: secret %s %s, skipped\n", output.Name, reason))
+			printStderr(cobraCmd, fmt.Sprintf("warning: secret %q %s, skipped\n", output.Name, reason))
 
 			continue
 		}
 
 		if previous, collided := sourceOf[*output.EnvName]; collided {
 			printStderr(cobraCmd, fmt.Sprintf(
-				"warning: env name %s from %s overrides the value from %s\n",
+				"warning: env name %s from %q overrides the value from %q\n",
 				*output.EnvName, output.Name, previous,
 			))
 		}
@@ -297,7 +306,51 @@ func printShellAssignments(cobraCmd *cobra.Command, outputs []revealOutput, form
 		}
 	}
 
+	return eraseSkipped(cobraCmd, skipped, sourceOf, format)
+}
+
+// eraseSkipped emits an erase line for every variable a skipped secret
+// was supposed to supply.
+//
+// Omitting the assignment is not enough. A shell that sources this
+// output keeps whatever value it already held under that name, so a
+// stale credential silently stands in for the one safetybox withheld.
+// Erasing makes the variable absent, which the caller can test for.
+//
+// A name another secret legitimately supplied is left alone, since that
+// value is current rather than stale.
+func eraseSkipped(
+	cobraCmd *cobra.Command, skipped []vault.Entry, delivered map[string]string, format string,
+) error {
+	for _, entry := range skipped {
+		if entry.EnvName == "" || !isShellIdentifier(entry.EnvName) {
+			continue
+		}
+
+		if _, supplied := delivered[entry.EnvName]; supplied {
+			continue
+		}
+
+		if _, err := fmt.Fprintln(cobraCmd.OutOrStdout(), eraseLine(format, entry.EnvName)); err != nil {
+			return fmt.Errorf("write shell erase: %w", err)
+		}
+
+		printStderr(cobraCmd, fmt.Sprintf(
+			"warning: %s was erased, so a sourcing shell cannot keep a stale value\n", entry.EnvName,
+		))
+	}
+
 	return nil
+}
+
+// eraseLine renders the removal of one variable in the requested
+// dialect.
+func eraseLine(format, name string) string {
+	if format == formatFish {
+		return "set --erase " + name
+	}
+
+	return "unset " + name
 }
 
 // encodeNonUTF8 base64-encodes any value JSON cannot carry byte for
@@ -313,7 +366,7 @@ func encodeNonUTF8(cobraCmd *cobra.Command, outputs []revealOutput) {
 		}
 
 		printStderr(cobraCmd, fmt.Sprintf(
-			"warning: secret %s is not valid UTF-8, its JSON value is base64-encoded, "+
+			"warning: secret %q is not valid UTF-8, its JSON value is base64-encoded, "+
 				"use exec for raw bytes\n",
 			outputs[i].Name,
 		))

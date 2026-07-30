@@ -50,6 +50,6 @@ func warnExpired(cobraCmd *cobra.Command, name string, expiresAt *time.Time) {
 		return
 	}
 
-	printStderr(cobraCmd, fmt.Sprintf("warning: secret %s expired at %s\n",
+	printStderr(cobraCmd, fmt.Sprintf("warning: secret %q expired at %s\n",
 		name, expiresAt.UTC().Format(time.RFC3339)))
 }

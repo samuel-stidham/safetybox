@@ -75,6 +75,12 @@ func vaultHint(err error) error {
 				"husk: inspect it and move it aside before retrying",
 			err,
 		)
+	case errors.Is(err, vault.ErrStoredTimeCorrupt):
+		return fmt.Errorf(
+			"%w: no safetybox writer produces that value, so the column was edited outside safetybox: "+
+				"`set` the named secret again to rewrite its timestamps",
+			err,
+		)
 	case errors.Is(err, vault.ErrSecretDeleted):
 		return fmt.Errorf("%w: `set` a new value to revive it or `purge` it for good", err)
 	case errors.Is(err, vault.ErrVersionNotFound):
@@ -108,6 +114,16 @@ func keyMaterialHint(err error) error {
 		return fmt.Errorf("%w: run `chmod 700` on the identity directory", err)
 	case errors.Is(err, identity.ErrExists):
 		return fmt.Errorf("%w: a previous run may have left a stale file, move it aside", err)
+	case errors.Is(err, envelope.ErrLegacyEnvelope):
+		// This one is checked before the generic mismatch, because the
+		// refusal looks like tampering and almost never is. An older
+		// safetybox writing to a migrated vault is the usual cause, and
+		// migrate now repairs it.
+		return fmt.Errorf(
+			"%w: an older safetybox most likely wrote this value during or after a migration: "+
+				"run `safetybox migrate` to repair it, or `set` the secret again",
+			err,
+		)
 	case errors.Is(err, envelope.ErrDecryptFailed):
 		return fmt.Errorf(
 			"%w: the identity may not match this vault, check for an interrupted rekey (a .new sibling of the identity file)",

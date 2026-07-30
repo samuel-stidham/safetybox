@@ -48,7 +48,17 @@ is valid. Leading slashes, trailing slashes, and spaces are not.
 `--env-name` records the environment variable exec will use. It must
 be a valid shell identifier, letters, digits, and underscores, not
 starting with a digit, so exec and `reveal --format` can emit it as a
-variable name. `--expires` takes RFC3339 or YYYY-MM-DD, where a bare
+variable name.
+
+Some valid identifiers are still refused. `PATH`, `IFS`, `ENV`,
+`BASH_ENV`, `SHELL`, `SHELLOPTS`, `BASHOPTS`, `CDPATH`, `GLOBIGNORE`,
+`PROMPT_COMMAND`, `PS4`, and any name starting with `LD_` or `DYLD_`
+decide what code a shell or the dynamic loader runs. A secret supplying
+one would run that code in every exec child, and in any shell sourcing
+`reveal --format` output. The comparison is case-sensitive, so a
+lowercase `path` is a different variable and is allowed.
+
+`--expires` takes RFC3339 or YYYY-MM-DD, where a bare
 date means midnight UTC. Both attributes stick until a later set
 changes them. Pass an empty value to either flag to clear it, so
 `--expires ''` removes an expiry and `--env-name ''` removes the env
@@ -240,20 +250,32 @@ safetybox exec -- <command> [args...]
 
 Resolves every non-deleted secret that has an env name, decrypts its
 newest enabled version, and runs the command with those variables
-added to the environment. Everything after `--` belongs to the
-child. stdin, stdout, and stderr pass through. The child's exit code
-is propagated, and a child killed by a signal exits 128 plus the
-signal number, the way a shell reports it. Expired secrets warn on
-stderr and still resolve.
+added to the environment. stdin, stdout, and stderr pass through. The
+child's exit code is propagated, and a child killed by a signal exits
+128 plus the signal number, the way a shell reports it. Expired secrets
+warn on stderr and still resolve.
+
+safetybox's own flags must come before the command. Everything from the
+command name onward belongs to the child, whether or not you write `--`,
+so a child flag can never change which vault, identity, or passphrase
+file safetybox reads. Write `--` when the child command itself begins
+with a dash.
 
 An env name stored before set validated them may not be a legal
 variable name. exec skips such a secret with a warning instead of
-injecting a malformed entry. A value that holds a NUL byte cannot
-become an environment variable either, so exec skips it with a warning
-that names it and runs the command with the rest. A secret whose sealed
-env name or expiry no longer matches its columns is skipped the same
-way. One such mismatch never denies every variable to the child. When
-two secrets share an env name the later one wins in the child
+injecting a malformed entry. A reserved env name is skipped the same
+way. A value that holds a NUL byte cannot become an environment variable
+either, so exec skips it with a warning that names it and runs the
+command with the rest. A secret whose sealed env name or expiry no
+longer matches its columns is skipped too. One such mismatch never
+denies every variable to the child.
+
+A skipped secret's variable is removed from the child's environment
+rather than left as the parent had it. Otherwise the child would read a
+stale value under that name and could not tell it from the real secret.
+The variable survives only when another secret legitimately supplies it.
+
+When two secrets share an env name the later one wins in the child
 environment, and exec warns about the override.
 
 ## passwd
