@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	// The pure-Go SQLite driver, registered as "sqlite".
 	_ "modernc.org/sqlite"
@@ -207,21 +208,63 @@ func (v *Vault) metaValue(ctx context.Context, key string) (string, error) {
 	return value, nil
 }
 
-func openHandle(ctx context.Context, path string) (*sql.DB, error) {
-	// secure_delete(1) makes SQLite overwrite freed content with zeros
-	// instead of leaving it in freelist pages, so purge and rekey
-	// actually destroy old envelope bytes. _txlock=immediate starts
-	// write transactions with a write lock up front, avoiding the
-	// SQLITE_BUSY_SNAPSHOT a deferred read-then-write hits under
-	// concurrency.
-	dsn := "file:" + path +
-		"?_txlock=immediate" +
-		"&_pragma=journal_mode(WAL)" +
-		"&_pragma=foreign_keys(1)" +
-		"&_pragma=secure_delete(1)" +
-		"&_pragma=busy_timeout(5000)"
+// txMetaValue reads one vault_meta value inside a transaction, so the
+// answer cannot change between the read and the commit that relies on
+// it. metaValue reads through the handle and gives no such guarantee.
+func txMetaValue(ctx context.Context, txn *sql.Tx, key string) (string, error) {
+	var value string
 
-	handle, err := sql.Open("sqlite", dsn)
+	row := txn.QueryRowContext(ctx, "SELECT value FROM vault_meta WHERE key = ?", key)
+	if err := row.Scan(&value); err != nil {
+		return "", fmt.Errorf("vault_meta[%s]: %w", key, err)
+	}
+
+	return value, nil
+}
+
+// dsnQuery carries the connection settings appended to every vault DSN.
+//
+// secure_delete(1) makes SQLite overwrite freed content with zeros
+// instead of leaving it in freelist pages, so purge and rekey actually
+// destroy old envelope bytes. _txlock=immediate starts write
+// transactions with a write lock up front, avoiding the
+// SQLITE_BUSY_SNAPSHOT a deferred read-then-write hits under
+// concurrency.
+const dsnQuery = "?_txlock=immediate" +
+	"&_pragma=journal_mode(WAL)" +
+	"&_pragma=foreign_keys(1)" +
+	"&_pragma=secure_delete(1)" +
+	"&_pragma=busy_timeout(5000)"
+
+// sqliteDSN renders a filesystem path as a SQLite URI.
+//
+// The path must be escaped, not concatenated. SQLite opens the DSN with
+// SQLITE_OPEN_URI, so it ends the filename at the first '#' and starts
+// the query at the first '?'. A path holding either character would
+// otherwise open a different file than the one safetybox created, and
+// the '?' case would swallow _txlock=immediate along with it. A literal
+// '%' has to be encoded too, because SQLite decodes %XX in the path.
+//
+// An absolute path is emitted with an empty authority, "file:///tmp/x",
+// which also keeps a leading "//" inside the path where it belongs. A
+// relative path is emitted without one, "file:vault.db", because an
+// empty authority there would make the first segment look like a host.
+func sqliteDSN(path string) string {
+	escaped := strings.NewReplacer(
+		"%", "%25",
+		"?", "%3F",
+		"#", "%23",
+	).Replace(path)
+
+	if strings.HasPrefix(path, "/") {
+		return "file://" + escaped + dsnQuery
+	}
+
+	return "file:" + escaped + dsnQuery
+}
+
+func openHandle(ctx context.Context, path string) (*sql.DB, error) {
+	handle, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

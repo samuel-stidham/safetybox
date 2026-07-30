@@ -55,6 +55,16 @@ func runMigrate(cobraCmd *cobra.Command, opts *options) error {
 		return err
 	}
 
+	// Refuse a missing vault before taking the lock. Locking first created
+	// a stray empty vault.db.lock beside nothing, in a directory that
+	// happened to exist, and nothing ever removed it. Lock files are
+	// permanent by design once a vault exists, so deleting it afterwards
+	// is not an option: that would reopen the fresh-inode race the design
+	// avoids.
+	if err := requireVaultFile(vaultPath); err != nil {
+		return userHint(err)
+	}
+
 	// Serialize against another migrate on the same vault before loading
 	// the identity or opening a write transaction. Without this, two
 	// concurrent migrates both pass the format pre-check, then the loser
@@ -79,9 +89,7 @@ func runMigrate(cobraCmd *cobra.Command, opts *options) error {
 
 	count, err := vault.Migrate(ctx, vaultPath, recipient.String(), newMigrateResealer(cobraCmd, key, recipient))
 	if errors.Is(err, vault.ErrAlreadyCurrentFormat) {
-		printStderr(cobraCmd, "vault is already at the current format, nothing to migrate\n")
-
-		return nil
+		return repairStragglers(cobraCmd, opts, vaultPath, key, recipient)
 	}
 
 	if errors.Is(err, vault.ErrFormatVersion) {
@@ -96,6 +104,70 @@ func runMigrate(cobraCmd *cobra.Command, opts *options) error {
 	}
 
 	return printJSON(cobraCmd, opts, migrateOutput{MigratedVersions: count, Result: "migrated"})
+}
+
+// repairStragglers runs on a vault that is already at the current
+// format. It looks for version 1 envelopes a 2.x binary stranded by
+// writing during a migration, and re-seals any it finds.
+//
+// Before this, an already-current vault made migrate stop, so a stranded
+// row failed every read with a tamper-shaped error and no tool could fix
+// it. The healthy case still reports nothing to do, and pays one decrypt
+// per envelope to prove it.
+func repairStragglers(
+	cobraCmd *cobra.Command, opts *options, vaultPath string,
+	key *age.X25519Identity, recipient *age.X25519Recipient,
+) error {
+	repaired, err := vault.RepairLegacyEnvelopes(
+		cobraCmd.Context(), vaultPath, recipient.String(),
+		newStragglerResealer(cobraCmd, key, recipient),
+	)
+	if err != nil {
+		return userHint(err)
+	}
+
+	if repaired == 0 {
+		printStderr(cobraCmd, "vault is already at the current format, nothing to migrate\n")
+
+		return nil
+	}
+
+	printStderr(cobraCmd, fmt.Sprintf(
+		"repaired %d value(s) left in the old format by an older safetybox writing during a migration\n",
+		repaired,
+	))
+
+	return printJSON(cobraCmd, opts, migrateOutput{MigratedVersions: repaired, Result: "repaired"})
+}
+
+// newStragglerResealer wraps the migration resealer with the check that
+// tells a stranded legacy row from a healthy one. A row that opens in the
+// current format reports ErrEnvelopeCurrent, which the vault layer treats
+// as nothing to do rather than as a failure.
+func newStragglerResealer(
+	cobraCmd *cobra.Command, key *age.X25519Identity, recipient age.Recipient,
+) vault.MigrationResealer {
+	migrateReseal := newMigrateResealer(cobraCmd, key, recipient)
+
+	return func(name string, number int64, envName, expiresAt string, oldEnvelope []byte) ([]byte, string, error) {
+		address := vault.CanonicalAddress(name, number)
+
+		value, _, err := envelope.Open(key, address, oldEnvelope)
+		if err == nil {
+			value.Destroy()
+
+			return nil, "", vault.ErrEnvelopeCurrent
+		}
+
+		// Only a genuine version 1 frame is repairable here. A decrypt
+		// failure or a real address mismatch is corruption or tampering,
+		// and must keep failing loudly rather than be re-sealed.
+		if !errors.Is(err, envelope.ErrLegacyEnvelope) {
+			return nil, "", userHint(err)
+		}
+
+		return migrateReseal(name, number, envName, expiresAt, oldEnvelope)
+	}
 }
 
 // newMigrateResealer builds the reseal callback the vault layer calls
@@ -122,7 +194,7 @@ func newMigrateResealer(
 		sealedEnvName, changed := frameSafeEnvName(envName)
 		if changed {
 			printStderr(cobraCmd, fmt.Sprintf(
-				"warning: secret %s had an env name with a newline the new format cannot store, "+
+				"warning: secret %q had an env name with a newline the new format cannot store, "+
 					"stored as %q, re-set it with --env-name if you need a different one\n",
 				name, sealedEnvName,
 			))

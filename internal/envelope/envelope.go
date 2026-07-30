@@ -59,7 +59,7 @@ func Seal(recipient age.Recipient, address string, bound Bound, value secret.Val
 		{"expiry", bound.ExpiresAt},
 	} {
 		if strings.ContainsRune(framed.field, '\n') {
-			return nil, fmt.Errorf("seal %s: %s has a newline: %w", address, framed.label, ErrInvalidFrame)
+			return nil, fmt.Errorf("seal %q: %s has a newline: %w", address, framed.label, ErrInvalidFrame)
 		}
 	}
 
@@ -69,19 +69,19 @@ func Seal(recipient age.Recipient, address string, bound Bound, value secret.Val
 
 	writer, err := age.Encrypt(&sealed, recipient)
 	if err != nil {
-		return nil, fmt.Errorf("seal %s: %w", address, err)
+		return nil, fmt.Errorf("seal %q: %w", address, err)
 	}
 
 	if _, err := writer.Write(header); err != nil {
-		return nil, fmt.Errorf("seal %s: %w", address, err)
+		return nil, fmt.Errorf("seal %q: %w", address, err)
 	}
 
 	if _, err := writer.Write(value.Expose()); err != nil {
-		return nil, fmt.Errorf("seal %s: %w", address, err)
+		return nil, fmt.Errorf("seal %q: %w", address, err)
 	}
 
 	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("seal %s: %w", address, err)
+		return nil, fmt.Errorf("seal %q: %w", address, err)
 	}
 
 	return sealed.Bytes(), nil
@@ -122,14 +122,14 @@ func buildHeader(address string, bound Bound) []byte {
 func Open(identity age.Identity, address string, blob []byte) (secret.Value, Bound, error) {
 	reader, err := age.Decrypt(bytes.NewReader(blob), identity)
 	if err != nil {
-		return secret.Value{}, Bound{}, fmt.Errorf("open %s: %w: %w", address, ErrDecryptFailed, err)
+		return secret.Value{}, Bound{}, fmt.Errorf("open %q: %w: %w", address, ErrDecryptFailed, err)
 	}
 
 	// ReadAllWiping zeroes each buffer it outgrows, so the decrypted
 	// plaintext leaves no unwiped copies the way io.ReadAll would.
 	payload, err := secret.ReadAllWiping(reader)
 	if err != nil {
-		return secret.Value{}, Bound{}, fmt.Errorf("open %s: %w: %w", address, ErrDecryptFailed, err)
+		return secret.Value{}, Bound{}, fmt.Errorf("open %q: %w: %w", address, ErrDecryptFailed, err)
 	}
 
 	// The decrypted payload holds plaintext on every path, including the
@@ -153,19 +153,19 @@ func Open(identity age.Identity, address string, blob []byte) (secret.Value, Bou
 func OpenLegacy(identity age.Identity, address string, blob []byte) (secret.Value, error) {
 	reader, err := age.Decrypt(bytes.NewReader(blob), identity)
 	if err != nil {
-		return secret.Value{}, fmt.Errorf("open %s: %w: %w", address, ErrDecryptFailed, err)
+		return secret.Value{}, fmt.Errorf("open %q: %w: %w", address, ErrDecryptFailed, err)
 	}
 
 	payload, err := secret.ReadAllWiping(reader)
 	if err != nil {
-		return secret.Value{}, fmt.Errorf("open %s: %w: %w", address, ErrDecryptFailed, err)
+		return secret.Value{}, fmt.Errorf("open %q: %w: %w", address, ErrDecryptFailed, err)
 	}
 
 	defer clear(payload)
 
 	embedded, value, found := bytes.Cut(payload, []byte("\n"))
 	if !found || string(embedded) != address {
-		return secret.Value{}, fmt.Errorf("open %s: %w", address, ErrAddressMismatch)
+		return secret.Value{}, fmt.Errorf("open %q: %w", address, ErrAddressMismatch)
 	}
 
 	return secret.New(value), nil
@@ -177,18 +177,29 @@ func OpenLegacy(identity age.Identity, address string, blob []byte) (secret.Valu
 // failure, reported as [ErrAddressMismatch] so the read path treats it
 // as tampering.
 func parseFrame(address string, payload []byte) ([]byte, Bound, error) {
+	// A version 1 frame is the bare address, a single newline, then the
+	// value, so it carries no blank-line terminator at all. Recognise it
+	// before the version 2 split. A version 2 frame starts with the
+	// version tag, and a canonical address never equals that tag, so the
+	// two cannot be confused. The refusal is unchanged, and the extra
+	// sentinel lets the cmd layer point at migrate rather than at
+	// tampering.
+	if bytes.HasPrefix(payload, []byte(address+"\n")) {
+		return nil, Bound{}, fmt.Errorf("open %q: %w: %w", address, ErrLegacyEnvelope, ErrAddressMismatch)
+	}
+
 	header, value, found := bytes.Cut(payload, []byte(headerTerminator))
 	if !found {
-		return nil, Bound{}, fmt.Errorf("open %s: no header terminator: %w", address, ErrAddressMismatch)
+		return nil, Bound{}, fmt.Errorf("open %q: no header terminator: %w", address, ErrAddressMismatch)
 	}
 
 	lines := bytes.Split(header, []byte("\n"))
 	if len(lines) < 2 || string(lines[0]) != envelopeVersion {
-		return nil, Bound{}, fmt.Errorf("open %s: not a v2 envelope: %w", address, ErrAddressMismatch)
+		return nil, Bound{}, fmt.Errorf("open %q: not a v2 envelope: %w", address, ErrAddressMismatch)
 	}
 
 	if string(lines[1]) != address {
-		return nil, Bound{}, fmt.Errorf("open %s: %w", address, ErrAddressMismatch)
+		return nil, Bound{}, fmt.Errorf("open %q: %w", address, ErrAddressMismatch)
 	}
 
 	var bound Bound
@@ -200,7 +211,7 @@ func parseFrame(address string, payload []byte) ([]byte, Bound, error) {
 		case bytes.HasPrefix(line, []byte(expPrefix)):
 			bound.ExpiresAt = string(line[len(expPrefix):])
 		default:
-			return nil, Bound{}, fmt.Errorf("open %s: unknown header line: %w", address, ErrAddressMismatch)
+			return nil, Bound{}, fmt.Errorf("open %q: unknown header line: %w", address, ErrAddressMismatch)
 		}
 	}
 

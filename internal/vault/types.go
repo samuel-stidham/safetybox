@@ -106,7 +106,13 @@ type EntryFilter struct {
 // metadata edit. Empty envName or expiresAt means the secret carries
 // none. The vault never sees plaintext, so sealing is injected by the
 // caller.
-type Sealer func(address, envName, expiresAt string) ([]byte, error)
+//
+// The recipient is supplied rather than looked up by the caller, and it
+// is read inside the writing transaction. A caller that read it earlier
+// could seal to a recipient a concurrent rekey had already retired.
+// Sealing needs the public recipient alone, so a write still never
+// requires the passphrase.
+type Sealer func(recipient, address, envName, expiresAt string) ([]byte, error)
 
 // Resealer re-encrypts an existing envelope during rekey.
 type Resealer func(name string, number int64, envelope []byte) ([]byte, error)

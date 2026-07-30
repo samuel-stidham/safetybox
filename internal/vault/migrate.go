@@ -79,6 +79,104 @@ func Migrate(ctx context.Context, path, expectedRecipient string, reseal Migrati
 	return count, nil
 }
 
+// RepairLegacyEnvelopes rescans a vault that is already at the current
+// format and re-seals any version 1 envelope it still holds.
+//
+// A 2.x binary racing migrate can strand such a row. The old binary
+// checks the format only when it opens the vault, and takes no part in
+// the migrate lock, so a set that began during the migration commits a
+// version 1 frame the moment migrate's transaction lands. Every later
+// read of that version then fails with a tamper-shaped refusal, and a
+// second migrate refused with ErrAlreadyCurrentFormat, so no tool could
+// repair it and the only recovery was re-setting the secret by hand.
+//
+// reseal sees every non-destroyed envelope and returns
+// [ErrEnvelopeCurrent] for rows already in the current format, which
+// this skips. It returns the number of envelopes repaired, which is zero
+// on the ordinary healthy vault.
+func RepairLegacyEnvelopes(
+	ctx context.Context, path, expectedRecipient string, reseal MigrationResealer,
+) (int64, error) {
+	path = filepath.Clean(path)
+
+	handle, err := openHandle(ctx, path)
+	if err != nil {
+		return 0, err
+	}
+
+	defer func() { _ = handle.Close() }()
+
+	repaired := &Vault{handle: handle, path: path}
+
+	if err := checkMigrateRecipient(ctx, repaired, expectedRecipient); err != nil {
+		return 0, err
+	}
+
+	count, err := resealStragglers(ctx, repaired, reseal)
+	if err != nil {
+		return 0, err
+	}
+
+	if count > 0 {
+		// Keep the old frames out of the write-ahead log, as Migrate does.
+		_ = repaired.Checkpoint(ctx)
+	}
+
+	return count, nil
+}
+
+// resealStragglers re-seals every legacy envelope found in an
+// already-current vault, inside one transaction. A vault with no
+// stragglers commits nothing and reports zero.
+func resealStragglers(ctx context.Context, repaired *Vault, reseal MigrationResealer) (int64, error) {
+	txn, err := repaired.handle.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin repair transaction: %w", err)
+	}
+
+	defer func() { _ = txn.Rollback() }()
+
+	versions, err := collectMigrateVersions(ctx, txn)
+	if err != nil {
+		return 0, err
+	}
+
+	fetch, err := txn.PrepareContext(ctx, "SELECT envelope FROM secret_version WHERE id = ?")
+	if err != nil {
+		return 0, fmt.Errorf("prepare envelope fetch: %w", err)
+	}
+
+	defer func() { _ = fetch.Close() }()
+
+	var count int64
+
+	for _, version := range versions {
+		err := resealOneVersion(ctx, txn, fetch, reseal, version)
+
+		// The overwhelmingly common case: the row is already current, so
+		// there is nothing to repair.
+		if errors.Is(err, ErrEnvelopeCurrent) {
+			continue
+		}
+
+		if err != nil {
+			return 0, err
+		}
+
+		count++
+	}
+
+	if count == 0 {
+		return 0, nil
+	}
+
+	if err := txn.Commit(); err != nil {
+		return 0, fmt.Errorf("commit repair: %w", err)
+	}
+
+	return count, nil
+}
+
 // checkMigratable confirms the vault is a real vault at format version
 // 1 encrypted to expectedRecipient. A vault already at the current
 // format returns [ErrAlreadyCurrentFormat], and any other version is
