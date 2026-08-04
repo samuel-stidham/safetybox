@@ -157,6 +157,23 @@ func TestGetRedactsValue(t *testing.T) {
 	assert.NotContains(t, stderr, fakeValueOne)
 }
 
+// TestVerboseEmitsDebugRecords pins that --verbose surfaces the
+// operational debug records and that the default level suppresses
+// them. Fragments are message-only, so no color pinning is needed.
+func TestVerboseEmitsDebugRecords(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fixture.runOK(fakeValueOne+"\n", "set", testSecretName)
+
+	_, stderr := fixture.runOK("", "--verbose", "get", testSecretName)
+	assert.Contains(t, stderr, "vault opened")
+	assert.Contains(t, stderr, "identity unlocked")
+	assert.Contains(t, stderr, "newest enabled version resolved")
+
+	_, stderr = fixture.runOK("", "get", testSecretName)
+	assert.NotContains(t, stderr, "vault opened", "debug records must stay behind --verbose")
+}
+
 func TestListAndPrefixFiltering(t *testing.T) {
 	fixture := newCLIFixture(t)
 
@@ -188,6 +205,24 @@ func TestExecInjectsEnvironment(t *testing.T) {
 	assert.Equal(t, fakeValueOne, stdout)
 }
 
+// TestExecCollisionCountsInjectedVariables pins the debug summary's
+// injected count as variables the child sees, never appended
+// assignments: two secrets sharing one env name inject one variable.
+func TestExecCollisionCountsInjectedVariables(t *testing.T) {
+	t.Setenv("CLICOLOR_FORCE", "0")
+
+	fixture := newCLIFixture(t)
+
+	fixture.runOK(fakeValueOne+"\n", "set", "lab/first", "--env-name", "FAKE_SHARED")
+	fixture.runOK(fakeValueTwo+"\n", "set", "lab/second", "--env-name", "FAKE_SHARED")
+
+	stdout, stderr := fixture.runOK("", "--verbose", "exec", "--", "sh", "-c", `printf '%s' "$FAKE_SHARED"`)
+
+	assert.Contains(t, stderr, "env name collision")
+	assert.Contains(t, stderr, "injected=1 not_injected=0")
+	assert.Equal(t, fakeValueTwo, stdout, "the later secret wins the collision")
+}
+
 func TestExecPropagatesExitCode(t *testing.T) {
 	fixture := newCLIFixture(t)
 
@@ -200,9 +235,11 @@ func TestExecPropagatesExitCode(t *testing.T) {
 }
 
 func TestExpiryIsStalenessNotDeletion(t *testing.T) {
+	t.Setenv("CLICOLOR_FORCE", "0")
+
 	fixture := newCLIFixture(t)
 
-	fixture.runOK(fakeValueOne+"\n", "set", "expired/secret", "--expires", "2020-01-02")
+	fixture.runOK(fakeValueOne+"\n", "set", "stale/probe", "--expires", "2020-01-02")
 
 	stdout, _ := fixture.runOK("", "stale", "--json")
 
@@ -210,12 +247,14 @@ func TestExpiryIsStalenessNotDeletion(t *testing.T) {
 
 	require.NoError(t, json.Unmarshal([]byte(stdout), &stale))
 	require.Len(t, stale, 1)
-	assert.Equal(t, "expired/secret", stale[0]["name"])
+	assert.Equal(t, "stale/probe", stale[0]["name"])
 
-	// The expired secret warns on stderr and still resolves.
-	_, stderr := fixture.runOK("", "get", "expired/secret")
-	assert.Contains(t, stderr, "expired")
-	assert.Equal(t, fakeValueOne, fixture.revealValue("expired/secret"))
+	// The expired secret warns on stderr and still resolves. The name
+	// deliberately avoids "expired" so only the log message can
+	// satisfy the assertion below.
+	_, stderr := fixture.runOK("", "get", "stale/probe")
+	assert.Contains(t, stderr, "secret expired")
+	assert.Equal(t, fakeValueOne, fixture.revealValue("stale/probe"))
 }
 
 func TestRekeyKeepsValuesAndRotatesRecipient(t *testing.T) {

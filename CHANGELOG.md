@@ -4,6 +4,76 @@ All notable changes to safetybox are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [4.0.0] - 2026-08-04
+
+A presentation release. Stderr diagnostics moved to styled, leveled
+log records through charmbracelet/log. Scripts that matched the old
+`warning:` prefix or the plain `Error:` line will not match the new
+records. That changes the output contract, so this is a major
+version. The module path moves to
+`github.com/samuel-stidham/safetybox/v4`, which Go requires for a v4
+release. The on-disk formats and the JSON on stdout are unchanged,
+so no migration is needed.
+
+### Security
+
+- The sensitive-key log backstop was exact and case-sensitive, so
+  `Password`, `TOKEN`, and `api_key` passed through unredacted. The
+  match is now ASCII-case-insensitive and covers compound keys:
+  `api_token`, `client_secret`, `DB-Password`, and `ApiToken` all
+  redact, and `key` joins the denylist. A whole key, a delimited
+  final segment, or an uppercase camelCase hump matches, never a bare
+  substring. Operational keys such as `identity_path` keep rendering.
+  Lowercase concatenations carried no separator or hump, so `apikey`,
+  `authtoken`, `secretkey`, `privatekey`, `privkey`, and `sshkey`
+  passed unredacted. They join the denylist as words, alongside
+  `passwd`, `credential`, `credentials`, and `creds`, which were
+  absent entirely.
+
+### Added
+
+- Styled log output through charmbracelet/log. Warnings and status
+  lines on stderr carry leveled badges and structured key=value
+  fields. Color follows the terminal and disappears in pipes.
+  `--log-json` keeps the stdlib JSON format, and redaction of secret
+  material holds on every path.
+- Debug records behind `--verbose`: vault opens, identity unlocks,
+  advisory locks, newest-version resolutions, batch decrypt
+  summaries, and child environment builds.
+- A styled help screen. Section headings render in bold yellow,
+  command names and flag specs in green. Piped help gains no styling
+  bytes, and subcommand help stays byte-identical to stock cobra.
+- A pure-ASCII banner replaces the quadrant-glyph logo, which rendered
+  unevenly across monospace fonts. The art tints through a
+  magenta-to-orange gradient on capable terminals.
+
+### Changed
+
+- The default log level moved from Warn to Info, so status lines such
+  as `passphrase changed` stay visible without `--verbose`.
+- Stderr diagnostics dropped their `warning:` prose prefix. The WARN
+  badge carries that meaning now.
+- Fatal errors log as a styled ERRO record instead of a plain `Error:`
+  line.
+- `init` no longer prints a five-line all-caps backup block. One
+  INFO record and one WARN record carry the same instruction.
+- `migrate` no longer states the repaired count in prose. The
+  repaired record carries it as a `count` attribute.
+- `github.com/charmbracelet/log` v1.0.0 and
+  `github.com/charmbracelet/lipgloss` v1.1.0 are direct dependencies
+  now.
+
+### Fixed
+
+- `--log-json` now holds when the command line itself is malformed.
+  The logger that reports a flag-parse failure installs before the
+  flags are read. `safetybox --log-json --bogusflag` therefore
+  reported the error as styled text in a stream the caller asked to
+  keep JSON. A dry-run parse through cobra's own routing now recovers
+  the flag first. The exec boundary is respected: a `--log-json`
+  among the child command's arguments never switches safetybox's own
+  logs.
+
 ## [3.0.1] - 2026-07-30
 
 ### Security

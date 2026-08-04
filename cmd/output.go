@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -43,13 +44,12 @@ func printJSON(cobraCmd *cobra.Command, opts *options, payload any) error {
 	return nil
 }
 
-// warnExpired tells the user on stderr that a secret is stale.
-// Expired secrets still resolve. Expiry is never a deletion trigger.
-func warnExpired(cobraCmd *cobra.Command, name string, expiresAt *time.Time) {
+// warnExpired records that a secret is stale. Expired secrets still
+// resolve. Expiry is never a deletion trigger.
+func warnExpired(name string, expiresAt *time.Time) {
 	if expiresAt == nil {
 		return
 	}
 
-	printStderr(cobraCmd, fmt.Sprintf("warning: secret %q expired at %s\n",
-		name, expiresAt.UTC().Format(time.RFC3339)))
+	slog.Warn("secret expired", "name", name, "expires_at", expiresAt.UTC().Format(time.RFC3339))
 }

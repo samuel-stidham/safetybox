@@ -27,7 +27,7 @@ safetybox init
 Generates an X25519 identity, encrypts it with a passphrase, writes
 it 0600 inside a 0700 directory, and creates the vault with the
 recipient stored in it. Finishes with a seal and open self-test.
-Refuses to overwrite an existing identity or vault. Prints the
+Refuses to overwrite an existing identity or vault. Logs the
 recipient and a backup warning to stderr.
 
 ## set
@@ -386,6 +386,6 @@ safetybox --version
 Prints the running version. Builds made through the Makefile or a
 release stamp it at build time. A plain `go install` gets no stamp,
 so the binary falls back to the module version recorded in the build
-info. Every path reports the same v-prefixed form, such as v2.0.0.
+info. Every path reports the same v-prefixed form, such as v4.0.0.
 Running `safetybox` with no arguments also shows the version under
 the banner.

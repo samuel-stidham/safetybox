@@ -5,13 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	osexec "os/exec"
 	"strings"
 	"syscall"
 
-	"github.com/samuel-stidham/safetybox/v3/internal/secret"
-	"github.com/samuel-stidham/safetybox/v3/internal/vault"
+	"github.com/samuel-stidham/safetybox/v4/internal/secret"
+	"github.com/samuel-stidham/safetybox/v4/internal/vault"
 
 	"github.com/spf13/cobra"
 )
@@ -139,22 +140,24 @@ func buildSecretEnv(cobraCmd *cobra.Command, opts *options) ([]string, error) {
 	// the last, so collisions warn too.
 	sourceOf := make(map[string]string, len(entries))
 
+	var notInjectable int
+
 	// exec always selects a batch by env-name filter, never a single
 	// explicit name, so a mismatching secret is skipped with a warning
 	// rather than aborting the run and denying every variable to the child.
 	skipped, err := forEachDecrypted(cobraCmd, opts, recipient, entries, false,
 		func(entry vault.Entry, _ bool, value secret.Value) error {
 			if reason := envInjectable(entry, value); reason != "" {
-				printStderr(cobraCmd, fmt.Sprintf("warning: secret %q %s, skipped\n", entry.Name, reason))
+				slog.Warn("secret skipped", "name", entry.Name, "reason", reason)
+
+				notInjectable++
 
 				return nil
 			}
 
 			if previous, collided := sourceOf[entry.EnvName]; collided {
-				printStderr(cobraCmd, fmt.Sprintf(
-					"warning: env name %s from %q overrides the value from %q\n",
-					entry.EnvName, entry.Name, previous,
-				))
+				slog.Warn("env name collision, the later secret overrides the earlier value",
+					"env_name", entry.EnvName, "name", entry.Name, "previous", previous)
 			}
 
 			sourceOf[entry.EnvName] = entry.Name
@@ -167,7 +170,17 @@ func buildSecretEnv(cobraCmd *cobra.Command, opts *options) ([]string, error) {
 		return nil, err
 	}
 
-	return withoutSkipped(cobraCmd, env, skipped, sourceOf), nil
+	kept := withoutSkipped(env, skipped, sourceOf)
+
+	// sourceOf holds one entry per delivered variable, so its length is
+	// what the child actually sees: a collision collapses to one.
+	// not_injected counts every decrypted entry withheld from the child,
+	// the not-injectable ones plus the metadata-mismatch skips. The name
+	// is distinct on purpose: forEachDecrypted's "skipped" key counts
+	// only the mismatch skips.
+	slog.Debug("child environment built", "injected", len(sourceOf), "not_injected", notInjectable+len(skipped))
+
+	return kept, nil
 }
 
 // envInjectable explains why an entry cannot become a child environment
@@ -205,9 +218,7 @@ func envInjectable(entry vault.Entry, value secret.Value) string {
 //
 // A skipped secret whose env name another secret legitimately supplied is
 // left alone, since that name is not stale.
-func withoutSkipped(
-	cobraCmd *cobra.Command, env []string, skipped []vault.Entry, delivered map[string]string,
-) []string {
+func withoutSkipped(env []string, skipped []vault.Entry, delivered map[string]string) []string {
 	toClear := staleEnvNames(skipped, delivered)
 	if len(toClear) == 0 {
 		return env
@@ -226,9 +237,7 @@ func withoutSkipped(
 	}
 
 	for name := range toClear {
-		printStderr(cobraCmd, fmt.Sprintf(
-			"warning: %s was cleared from the environment, so the child cannot read a stale value\n", name,
-		))
+		slog.Warn("variable cleared from the environment, so the child cannot read a stale value", "env_name", name)
 	}
 
 	return kept

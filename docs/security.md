@@ -27,6 +27,14 @@ package, and leave it through one method, `Expose`. Formatting, JSON
 encoding, and logging of that type all render `[REDACTED]`. The
 compiler enforces the boundary because the bytes are unexported.
 
+The log stream carries a second layer. Both log handlers redact any
+attribute whose key names secret-bearing content. A raw string
+logged under `password`, `api_token`, or `SecretKey` renders as
+`[REDACTED]`. The match is a case-insensitive standalone suffix, so
+operational keys such as `identity_path` keep rendering. This
+backstop guards a mistaken call site, while `secret.Value` remains
+the boundary.
+
 Plaintext is never written to disk, logs, or command arguments. Not
 in errors, not in debug output, not in test fixtures. Values enter
 through stdin or a no-echo prompt. Passphrases enter the same way or

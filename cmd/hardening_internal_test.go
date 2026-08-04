@@ -13,9 +13,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
-	"github.com/samuel-stidham/safetybox/v3/internal/identity"
-	"github.com/samuel-stidham/safetybox/v3/internal/vault"
+	"github.com/samuel-stidham/safetybox/v4/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v4/internal/identity"
+	"github.com/samuel-stidham/safetybox/v4/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -101,6 +101,7 @@ func TestLooseVaultPermsWarnOnOpen(t *testing.T) {
 
 	assert.Contains(t, stderr, "group or world can access")
 	assert.Contains(t, stderr, "0644")
+	assert.Contains(t, stderr, "vault file", "the label attr must name the loose path's role")
 }
 
 // TestHalfCreatedVaultHints covers B-4: a schema-less file at the vault

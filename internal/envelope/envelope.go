@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/samuel-stidham/safetybox/v3/internal/secret"
+	"github.com/samuel-stidham/safetybox/v4/internal/secret"
 
 	"filippo.io/age"
 )

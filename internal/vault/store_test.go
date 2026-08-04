@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/samuel-stidham/safetybox/v3/internal/vault"
+	"github.com/samuel-stidham/safetybox/v4/internal/vault"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

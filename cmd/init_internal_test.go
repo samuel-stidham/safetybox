@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samuel-stidham/safetybox/v3/internal/vault"
+	"github.com/samuel-stidham/safetybox/v4/internal/vault"
 
 	"filippo.io/age"
 	"github.com/stretchr/testify/assert"
@@ -88,7 +88,9 @@ func TestInitEndToEnd(t *testing.T) {
 
 	// The recipient and the backup warning went to stderr.
 	assert.Contains(t, stderr, recipient)
-	assert.Contains(t, stderr, "BACK UP")
+	assert.Contains(t, stderr, "back up the identity file")
+	assert.Contains(t, stderr, "unrecoverable")
+	assert.Contains(t, stderr, "WARN", "the backup notice must carry the warn badge")
 }
 
 func TestInitRefusesExistingIdentity(t *testing.T) {

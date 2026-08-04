@@ -7,10 +7,11 @@ is no server, no GUI, and no unencrypted storage.
 
 ## Status
 
-safetybox 3.0 is the current major release. Every verb works end to
+safetybox 4.0 is the current major release. Every verb works end to
 end: init, set, get, reveal, show, list, stale, disable, delete,
-purge, exec, passwd, rekey, and migrate. safetybox is feature complete
-for its single-user scope, so ongoing work is security and bug fixes.
+purge, exec, passwd, rekey, and migrate. 4.0 restyles the stderr
+diagnostics as leveled log records and changes nothing on disk.
+safetybox is feature complete for its single-user scope.
 Keep an offsite backup of the identity file, because no passphrase can
 recover the vault without it.
 
@@ -33,7 +34,7 @@ own address, and decryption fails if the ciphertext was moved or swapped.
 Install the latest tagged release with Go 1.26 or later.
 
 ```sh
-go install github.com/samuel-stidham/safetybox/v3@latest
+go install github.com/samuel-stidham/safetybox/v4@latest
 ```
 
 Or build from source.
@@ -52,9 +53,9 @@ v-prefixed version through `safetybox --version`.
 
 ## Upgrading from 1.x or 2.x
 
-3.0 changes the on-disk format. A vault created by safetybox 1.x or
-2.x must be migrated once before 3.0 can open it. Update the binary,
-then run:
+The 3.0 release changed the on-disk format. A vault created by
+safetybox 1.x or 2.x must be migrated once before 3.0 or any later
+release can open it. Update the binary, then run:
 
 ```sh
 safetybox migrate
@@ -81,7 +82,7 @@ safetybox init
 ```
 
 init generates an X25519 identity, encrypts it with a passphrase you
-choose, and creates the vault. It prints your recipient and runs a
+choose, and creates the vault. It logs your recipient and runs a
 seal-and-open self-test before reporting success.
 
 Back up the identity file immediately. Without it, every secret in the

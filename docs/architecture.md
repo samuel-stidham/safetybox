@@ -1,6 +1,6 @@
 # Architecture
 
-safetybox is a thin CLI over three internal packages. The package
+safetybox is a thin CLI over five internal packages. The package
 boundaries are load-bearing. They are what make the security
 guarantees checkable by the compiler instead of by review.
 
@@ -13,7 +13,7 @@ internal/secret/     secret.Value and the wiping reader for plaintext bytes
 internal/envelope/   age seal and open, address binding
 internal/identity/   identity file load, write, and atomic replace
 internal/vault/      SQLite store, schema, versions, metadata
-internal/logging/    slog setup on stderr
+internal/logging/    styled slog handlers and the redaction backstop
 ```
 
 Secrets flow `secret → envelope → vault` and never backward. The
@@ -36,6 +36,21 @@ environment, and the envelope seal path. Never add another exit and
 never move the type into a shared package. `Destroy` zeroes the held
 bytes, and the decrypt paths call it as soon as the value is copied
 out, so a plaintext copy does not sit on the heap for the whole run.
+
+## Logging
+
+Diagnostics are slog records, emitted by cmd and rendered by
+internal/logging. The text path wraps a charmbracelet/log handler in
+a redacting handler. It resolves LogValuers, then redacts any leaf
+attribute whose key names secret material, matched as a standalone
+suffix. `--log-json` keeps the stdlib JSON handler with the same
+backstop, so the machine format never shifts under log shippers. The
+default level is Info and `--verbose` lowers it to Debug. Styling
+follows the destination, so a piped record carries no ANSI bytes.
+
+The styled help lives in `cmd/style.go`. The root help adds the
+banner and a version header. Subcommand help keeps stock cobra's
+layout, and piped help gains no styling bytes.
 
 ## Data model
 

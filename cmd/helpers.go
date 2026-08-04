@@ -5,14 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
-	"github.com/samuel-stidham/safetybox/v3/internal/identity"
-	"github.com/samuel-stidham/safetybox/v3/internal/secret"
-	"github.com/samuel-stidham/safetybox/v3/internal/vault"
+	"github.com/samuel-stidham/safetybox/v4/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v4/internal/identity"
+	"github.com/samuel-stidham/safetybox/v4/internal/secret"
+	"github.com/samuel-stidham/safetybox/v4/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -100,6 +101,8 @@ func flockExclusiveNB(lockFilePath, busyMessage string, missingParent error) (fu
 		return nil, fmt.Errorf("lock %s: %w", lockFilePath, err)
 	}
 
+	slog.Debug("advisory lock acquired", "lock_path", lockFilePath)
+
 	return func() {
 		_ = unix.Flock(int(file.Fd()), unix.LOCK_UN)
 		_ = file.Close()
@@ -156,17 +159,18 @@ func lockSiblingPath(targetPath string) string {
 // threading a warning through each open. A resolve error is left to the
 // verb itself to surface, and a missing vault, the normal case before
 // init, produces no warning.
-func warnLooseVaultPerms(cobraCmd *cobra.Command, opts *options) {
+func warnLooseVaultPerms(opts *options) {
 	path, err := opts.resolveVaultPath()
 	if err != nil {
 		return
 	}
 
 	for _, loose := range vault.LoosePermissions(path) {
-		printStderr(cobraCmd, fmt.Sprintf(
-			"warning: %s %s has mode %04o, group or world can access it: run chmod %04o on it\n",
-			loose.Label, loose.Path, loose.Mode, loose.Recommend,
-		))
+		slog.Warn("group or world can access a vault path, run chmod on it",
+			"label", loose.Label,
+			"loose_path", loose.Path,
+			"mode", fmt.Sprintf("%04o", loose.Mode),
+			"chmod", fmt.Sprintf("%04o", loose.Recommend))
 	}
 }
 
@@ -182,6 +186,8 @@ func (o *options) openVault(ctx context.Context) (*vault.Vault, error) {
 	if err != nil {
 		return nil, userHint(err)
 	}
+
+	slog.Debug("vault opened", "vault_path", path)
 
 	return opened, nil
 }
@@ -225,6 +231,8 @@ func loadIdentity(cobraCmd *cobra.Command, opts *options) (*age.X25519Identity, 
 	if err != nil {
 		return nil, nil, userHint(err)
 	}
+
+	slog.Debug("identity unlocked", "identity_path", path)
 
 	return key, cleanup, nil
 }
@@ -337,9 +345,7 @@ func forEachDecrypted(cobraCmd *cobra.Command, opts *options, expectedRecipient 
 				return nil, fmt.Errorf("verify %q: %w", entry.Name, err)
 			}
 
-			printStderr(cobraCmd, fmt.Sprintf(
-				"warning: secret %q metadata does not match the sealed value, skipped\n", entry.Name,
-			))
+			slog.Warn("secret metadata does not match the sealed value, skipped", "name", entry.Name)
 
 			skipped = append(skipped, entry)
 
@@ -348,7 +354,7 @@ func forEachDecrypted(cobraCmd *cobra.Command, opts *options, expectedRecipient 
 
 		expired := entry.Expired(now)
 		if expired {
-			warnExpired(cobraCmd, entry.Name, entry.ExpiresAt)
+			warnExpired(entry.Name, entry.ExpiresAt)
 		}
 
 		visitErr := visit(entry, expired, value)
@@ -362,6 +368,8 @@ func forEachDecrypted(cobraCmd *cobra.Command, opts *options, expectedRecipient 
 			return nil, visitErr
 		}
 	}
+
+	slog.Debug("batch decrypt finished", "entries", len(entries), "skipped", len(skipped))
 
 	return skipped, nil
 }
@@ -398,6 +406,8 @@ func resolveNewest(cobraCmd *cobra.Command, opts *options, name string) (*resolv
 		return nil, fmt.Errorf("read stored recipient: %w", recipientErr)
 	}
 
+	slog.Debug("newest enabled version resolved", "name", name, "version", newest.Version.Number)
+
 	key, cleanup, err := loadIdentity(cobraCmd, opts)
 	if err != nil {
 		return nil, err
@@ -430,7 +440,7 @@ func resolveNewest(cobraCmd *cobra.Command, opts *options, name string) (*resolv
 	}
 
 	if newest.Secret.Expired(nowUTC()) {
-		warnExpired(cobraCmd, name, newest.Secret.ExpiresAt)
+		warnExpired(name, newest.Secret.ExpiresAt)
 	}
 
 	return &resolved{meta: newest.Secret, version: newest.Version, value: value}, nil

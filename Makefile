@@ -1,5 +1,5 @@
 BIN            := safetybox
-PKG            := github.com/samuel-stidham/$(BIN)/v3
+PKG            := github.com/samuel-stidham/$(BIN)/v4
 LOCAL_VERSION  := $(shell git describe --tags --always --dirty)
 GO_VERSION     := 1.26
 GOBIN          := $(shell go env GOPATH)/bin
