@@ -35,7 +35,6 @@ and deletion are not bound.
 ## Open
 
 Nothing is tracked here anymore. safetybox is feature complete for its
-single-user scope. Future work is security fixes and bug fixes, filed
-as GitHub issues and released as patch and minor versions. The final
-3.0.0 review rounds left five open issues, #10 through #14, which are
-the release freeze gate.
+single-user scope. Ongoing work is fixes and polish, filed as GitHub
+issues. The final 3.0.0 review rounds left five issues, #10 through
+#14, all closed in 3.0.1.

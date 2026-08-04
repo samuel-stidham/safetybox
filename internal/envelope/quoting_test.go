@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
-	"github.com/samuel-stidham/safetybox/v3/internal/secret"
+	"github.com/samuel-stidham/safetybox/v4/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v4/internal/secret"
 
 	"filippo.io/age"
 	"github.com/stretchr/testify/assert"

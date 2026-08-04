@@ -44,14 +44,20 @@ JSON for pipes.
 safetybox reveal api/stripe/live --json | jq -r .value
 ```
 
-`-v` enables debug logging and `--log-json` switches log lines to
-JSON. Logs go to stderr and never contain secret material.
+Logs are leveled records on stderr. The default level is Info, and
+`-v` or `--verbose` adds debug records tracing vault opens, identity
+unlocks, and batch decrypts. Records are styled on a terminal and
+plain in a pipe. `--log-json` switches them to single-line JSON for
+log shippers, and it holds even when the command line fails to
+parse. Logs never contain secret material. A redaction backstop
+replaces the value of any attribute whose key names secret-bearing
+content with `[REDACTED]`.
 
 ## Output conventions
 
-Results go to stdout as JSON. Prompts, warnings, and human guidance
-go to stderr. That split keeps pipes clean. An expired secret prints
-a warning on stderr and still resolves on stdout.
+Results go to stdout as JSON. Prompts and log records go to stderr.
+That split keeps pipes clean. An expired secret logs a warning on
+stderr and still resolves on stdout.
 
 Exit codes are 0 on success and 1 on any error. exec is the
 exception. It propagates the child's exit code so wrappers behave

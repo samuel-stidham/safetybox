@@ -6,12 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 
-	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
-	"github.com/samuel-stidham/safetybox/v3/internal/identity"
-	"github.com/samuel-stidham/safetybox/v3/internal/secret"
-	"github.com/samuel-stidham/safetybox/v3/internal/vault"
+	"github.com/samuel-stidham/safetybox/v4/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v4/internal/identity"
+	"github.com/samuel-stidham/safetybox/v4/internal/secret"
+	"github.com/samuel-stidham/safetybox/v4/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -87,7 +88,7 @@ func runInit(cobraCmd *cobra.Command, opts *options) error {
 		return fmt.Errorf("self-test: %w", err)
 	}
 
-	printInitSuccess(cobraCmd, identityPath, vaultPath, key.Recipient().String())
+	printInitSuccess(identityPath, vaultPath, key.Recipient().String())
 
 	return nil
 }
@@ -130,22 +131,14 @@ func selfTest(ctx context.Context, vaultPath string, key *age.X25519Identity) er
 	return nil
 }
 
-func printInitSuccess(cobraCmd *cobra.Command, identityPath, vaultPath, recipient string) {
-	lines := []string{
-		"safetybox initialized",
-		"",
-		"  identity:  " + identityPath,
-		"  vault:     " + vaultPath,
-		"  recipient: " + recipient,
-		"",
-		"BACK UP THE IDENTITY FILE NOW.",
-		"Without it every secret in this vault is unrecoverable.",
-		"The passphrase alone cannot recover them. Copy",
-		"  " + identityPath,
-		"somewhere safe and offline.",
-	}
+func printInitSuccess(identityPath, vaultPath, recipient string) {
+	slog.Info("safetybox initialized",
+		"identity_path", identityPath, "vault_path", vaultPath, "recipient", recipient)
 
-	for _, line := range lines {
-		printStderr(cobraCmd, line+"\n")
-	}
+	// The backup warning is the one record a new user must not scroll
+	// past: without the identity file the vault is a brick.
+	slog.Warn("back up the identity file now: without it every secret in this vault is "+
+		"unrecoverable, and the passphrase alone cannot recover them, copy the identity "+
+		"file somewhere safe and offline",
+		"identity_path", identityPath)
 }

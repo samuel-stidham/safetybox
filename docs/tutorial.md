@@ -14,7 +14,7 @@ If you want the terse version of any command, the
 You need Go 1.26 or later to build from source.
 
 ```sh
-go install github.com/samuel-stidham/safetybox/v3@latest
+go install github.com/samuel-stidham/safetybox/v4@latest
 ```
 
 That puts `safetybox` in `$GOPATH/bin`, which is `~/go/bin` by default.
@@ -42,7 +42,7 @@ written to `~/.config/safetybox/identity.age`. The public half is the
 recipient. It is stored in the vault at
 `~/.local/share/safetybox/vault.db`. `init` finishes with a self-test
 that seals and opens a throwaway value through the full stack, then
-prints your recipient.
+logs your recipient on stderr.
 
 Pick a strong passphrase. It is the only thing protecting your identity
 file if that file is ever stolen.
@@ -353,10 +353,11 @@ against a tampered vault and against pointing the wrong identity at it.
 
 ## 19. Upgrade an older vault with migrate
 
-If you came to 3.0 from safetybox 1.x or 2.x, your vault is in the old
-on-disk format and 3.0 refuses to open it until you migrate. The 3.0
-format seals each secret's env name and expiry into its envelope, so a
-later edit to those columns is caught on read.
+If you came from safetybox 1.x or 2.x, your vault is in the old
+on-disk format. Newer releases refuse to open it until you migrate.
+The current format arrived in 3.0. It seals each secret's env name
+and expiry into its envelope, so a later edit to those columns is
+caught on read.
 
 ```sh
 safetybox migrate

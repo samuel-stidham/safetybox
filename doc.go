@@ -21,10 +21,12 @@
 //	purge    destroy a secret's envelopes forever
 //	passwd   change the identity passphrase
 //	rekey    rotate to a fresh identity and re-encrypt the vault
+//	migrate  upgrade an older vault to the current on-disk format
 //
-// Output is JSON on stdout, with warnings and prompts on stderr.
-// reveal is the single verb that prints plaintext. Everything else
-// redacts.
+// Output is JSON on stdout, with prompts and leveled log records on
+// stderr. Records are styled on a terminal, plain in a pipe, and
+// JSON under --log-json. reveal is the single verb that prints
+// plaintext. Everything else redacts.
 //
 // # Security model
 //

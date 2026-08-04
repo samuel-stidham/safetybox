@@ -3,10 +3,11 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
-	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
-	"github.com/samuel-stidham/safetybox/v3/internal/vault"
+	"github.com/samuel-stidham/safetybox/v4/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v4/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -87,7 +88,7 @@ func runMigrate(cobraCmd *cobra.Command, opts *options) error {
 
 	recipient := key.Recipient()
 
-	count, err := vault.Migrate(ctx, vaultPath, recipient.String(), newMigrateResealer(cobraCmd, key, recipient))
+	count, err := vault.Migrate(ctx, vaultPath, recipient.String(), newMigrateResealer(key, recipient))
 	if errors.Is(err, vault.ErrAlreadyCurrentFormat) {
 		return repairStragglers(cobraCmd, opts, vaultPath, key, recipient)
 	}
@@ -120,22 +121,20 @@ func repairStragglers(
 ) error {
 	repaired, err := vault.RepairLegacyEnvelopes(
 		cobraCmd.Context(), vaultPath, recipient.String(),
-		newStragglerResealer(cobraCmd, key, recipient),
+		newStragglerResealer(key, recipient),
 	)
 	if err != nil {
 		return userHint(err)
 	}
 
 	if repaired == 0 {
-		printStderr(cobraCmd, "vault is already at the current format, nothing to migrate\n")
+		slog.Info("vault is already at the current format, nothing to migrate")
 
 		return nil
 	}
 
-	printStderr(cobraCmd, fmt.Sprintf(
-		"repaired %d value(s) left in the old format by an older safetybox writing during a migration\n",
-		repaired,
-	))
+	slog.Info("repaired values left in the old format by an older safetybox writing during a migration",
+		"count", repaired)
 
 	return printJSON(cobraCmd, opts, migrateOutput{MigratedVersions: repaired, Result: "repaired"})
 }
@@ -144,10 +143,8 @@ func repairStragglers(
 // tells a stranded legacy row from a healthy one. A row that opens in the
 // current format reports ErrEnvelopeCurrent, which the vault layer treats
 // as nothing to do rather than as a failure.
-func newStragglerResealer(
-	cobraCmd *cobra.Command, key *age.X25519Identity, recipient age.Recipient,
-) vault.MigrationResealer {
-	migrateReseal := newMigrateResealer(cobraCmd, key, recipient)
+func newStragglerResealer(key *age.X25519Identity, recipient age.Recipient) vault.MigrationResealer {
+	migrateReseal := newMigrateResealer(key, recipient)
 
 	return func(name string, number int64, envName, expiresAt string, oldEnvelope []byte) ([]byte, string, error) {
 		address := vault.CanonicalAddress(name, number)
@@ -176,9 +173,7 @@ func newStragglerResealer(
 // frame. It sanitizes a legacy env name the new frame cannot carry,
 // warns naming the secret, and returns the env name it actually sealed
 // so the vault layer can reconcile the shared column.
-func newMigrateResealer(
-	cobraCmd *cobra.Command, key *age.X25519Identity, recipient age.Recipient,
-) vault.MigrationResealer {
+func newMigrateResealer(key *age.X25519Identity, recipient age.Recipient) vault.MigrationResealer {
 	return func(name string, number int64, envName, expiresAt string, oldEnvelope []byte) ([]byte, string, error) {
 		address := vault.CanonicalAddress(name, number)
 
@@ -193,11 +188,9 @@ func newMigrateResealer(
 
 		sealedEnvName, changed := frameSafeEnvName(envName)
 		if changed {
-			printStderr(cobraCmd, fmt.Sprintf(
-				"warning: secret %q had an env name with a newline the new format cannot store, "+
-					"stored as %q, re-set it with --env-name if you need a different one\n",
-				name, sealedEnvName,
-			))
+			slog.Warn("secret env name had a newline the new format cannot store, "+
+				"re-set it with --env-name if you need a different one",
+				"name", name, "stored_as", sealedEnvName)
 		}
 
 		bound := envelope.Bound{EnvName: sealedEnvName, ExpiresAt: expiresAt}
