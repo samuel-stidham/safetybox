@@ -50,7 +50,8 @@ unlocks, and batch decrypts. Records are styled on a terminal and
 plain in a pipe. `--log-json` switches them to single-line JSON for
 log shippers, and it holds even when the command line fails to
 parse. Logs never contain secret material. A redaction backstop
-blanks any attribute whose key names secret-bearing content.
+replaces the value of any attribute whose key names secret-bearing
+content with `[REDACTED]`.
 
 ## Output conventions
 

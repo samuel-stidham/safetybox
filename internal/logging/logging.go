@@ -40,11 +40,14 @@ func redactSensitiveKeys(_ []string, attr slog.Attr) slog.Attr {
 // suffix and the word stands alone: as the whole key, as a segment
 // after '_', '-', or '.', or as a camelCase hump such as ApiToken.
 // The hump rule also fires on an all-caps key such as APIKEY, which
-// over-redacts by design so the backstop fails closed. Substring
-// matching is deliberately absent so operational keys such as
-// identity_path and vault_path keep rendering. Lowercase
-// concatenations such as apikey have no separator or hump, so the
-// common ones appear as denylist words in their own right.
+// over-redacts by design so the backstop fails closed. EqualFold
+// folds Unicode, but the suffix anchor is byte-length and every
+// denylist word is pure ASCII, so a multi-byte rune can never
+// align. The match is ASCII in effect. Substring matching is
+// deliberately absent so operational keys such as identity_path
+// and vault_path keep rendering. Lowercase concatenations such as
+// apikey have no separator or hump, so the common ones appear as
+// denylist words in their own right.
 func isSensitiveKey(key string) bool {
 	for _, word := range [...]string{
 		"passphrase", "value", "plaintext", "identity",
