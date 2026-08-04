@@ -5,12 +5,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/samuel-stidham/safetybox/v3/internal/secret"
-	"github.com/samuel-stidham/safetybox/v3/internal/vault"
+	"github.com/samuel-stidham/safetybox/v4/internal/secret"
+	"github.com/samuel-stidham/safetybox/v4/internal/vault"
 
 	"github.com/spf13/cobra"
 )
@@ -133,7 +134,7 @@ func runReveal(cobraCmd *cobra.Command, opts *options, names []string, flags rev
 		return printShellAssignments(cobraCmd, outputs, skipped, flags.format, len(names) > 0)
 	}
 
-	encodeNonUTF8(cobraCmd, outputs)
+	encodeNonUTF8(outputs)
 
 	// A single explicit name keeps the original one-object output
 	// shape, so `reveal <name> --json | jq -r .value` stays stable.
@@ -287,16 +288,14 @@ func printShellAssignments(
 
 	for _, output := range outputs {
 		if reason := shellUsable(output); reason != "" {
-			printStderr(cobraCmd, fmt.Sprintf("warning: secret %q %s, skipped\n", output.Name, reason))
+			slog.Warn("secret skipped", "name", output.Name, "reason", reason)
 
 			continue
 		}
 
 		if previous, collided := sourceOf[*output.EnvName]; collided {
-			printStderr(cobraCmd, fmt.Sprintf(
-				"warning: env name %s from %q overrides the value from %q\n",
-				*output.EnvName, output.Name, previous,
-			))
+			slog.Warn("env name collision, the later secret overrides the earlier value",
+				"env_name", *output.EnvName, "name", output.Name, "previous", previous)
 		}
 
 		sourceOf[*output.EnvName] = output.Name
@@ -335,9 +334,7 @@ func eraseSkipped(
 			return fmt.Errorf("write shell erase: %w", err)
 		}
 
-		printStderr(cobraCmd, fmt.Sprintf(
-			"warning: %s was erased, so a sourcing shell cannot keep a stale value\n", entry.EnvName,
-		))
+		slog.Warn("variable erased, so a sourcing shell cannot keep a stale value", "env_name", entry.EnvName)
 	}
 
 	return nil
@@ -359,17 +356,14 @@ func eraseLine(format, name string) string {
 // the vault holds. Encoded values are marked with encoding: "base64"
 // and a stderr warning, so a piped consumer can decode them or reach
 // for exec instead. It mutates outputs in place.
-func encodeNonUTF8(cobraCmd *cobra.Command, outputs []revealOutput) {
+func encodeNonUTF8(outputs []revealOutput) {
 	for i := range outputs {
 		if utf8.ValidString(outputs[i].Value) {
 			continue
 		}
 
-		printStderr(cobraCmd, fmt.Sprintf(
-			"warning: secret %q is not valid UTF-8, its JSON value is base64-encoded, "+
-				"use exec for raw bytes\n",
-			outputs[i].Name,
-		))
+		slog.Warn("secret is not valid UTF-8, its JSON value is base64-encoded, use exec for raw bytes",
+			"name", outputs[i].Name)
 
 		outputs[i].Value = base64.StdEncoding.EncodeToString([]byte(outputs[i].Value))
 		outputs[i].Encoding = encodingBase64

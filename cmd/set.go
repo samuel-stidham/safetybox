@@ -7,9 +7,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
-	"github.com/samuel-stidham/safetybox/v3/internal/secret"
-	"github.com/samuel-stidham/safetybox/v3/internal/vault"
+	"github.com/samuel-stidham/safetybox/v4/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v4/internal/secret"
+	"github.com/samuel-stidham/safetybox/v4/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"

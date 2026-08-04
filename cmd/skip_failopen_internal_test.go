@@ -15,6 +15,8 @@ import (
 // variable the parent already held stayed visible to the child, and the
 // child could not tell it from the real secret. The run exited 0.
 func TestExecClearsASkippedVariableSoNoStaleValueSurvives(t *testing.T) {
+	t.Setenv("CLICOLOR_FORCE", "0")
+
 	fixture := newCLIFixture(t)
 
 	fixture.runOK("fake-real-value\n", "set", "api/tampered", "--env-name", "FAKE_TAMPERED")
@@ -26,7 +28,7 @@ func TestExecClearsASkippedVariableSoNoStaleValueSurvives(t *testing.T) {
 
 	tamperColumn(t, fixture.vaultPath, "expires_at", "2099-01-01T00:00:00Z", "api/tampered")
 
-	stdout, stderr := fixture.runOK("", "exec", "--", "sh", "-c",
+	stdout, stderr := fixture.runOK("", "--verbose", "exec", "--", "sh", "-c",
 		`printf 'tampered=[%s] healthy=[%s]' "$FAKE_TAMPERED" "$FAKE_HEALTHY"`)
 
 	assert.Equal(t, "tampered=[] healthy=[fake-healthy-value]", stdout,
@@ -35,6 +37,13 @@ func TestExecClearsASkippedVariableSoNoStaleValueSurvives(t *testing.T) {
 		"the child must not read the value the parent happened to hold")
 	assert.Contains(t, stderr, "skipped")
 	assert.Contains(t, stderr, "cleared from the environment")
+
+	// api/healthy is delivered and api/tampered is a metadata-mismatch
+	// skip, so not_injected must count that skip. This is the only
+	// assertion that pins the len(skipped) half of the sum: the
+	// collision test sees both terms at zero, so dropping len(skipped)
+	// there is invisible.
+	assert.Contains(t, stderr, "injected=1 not_injected=1")
 }
 
 // TestExecKeepsAnEnvNameAnotherSecretSupplies guards against clearing

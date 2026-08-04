@@ -1,7 +1,9 @@
 package cmd
 
 import (
-	"github.com/samuel-stidham/safetybox/v3/internal/identity"
+	"log/slog"
+
+	"github.com/samuel-stidham/safetybox/v4/internal/identity"
 
 	"github.com/spf13/cobra"
 )
@@ -75,7 +77,7 @@ func runPasswd(cobraCmd *cobra.Command, opts *options, newPassphraseFile string)
 		return userHint(err)
 	}
 
-	printStderr(cobraCmd, "passphrase changed for "+identityPath+"\n")
+	slog.Info("passphrase changed", "identity_path", identityPath)
 
 	return nil
 }

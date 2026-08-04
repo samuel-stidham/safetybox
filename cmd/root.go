@@ -8,10 +8,11 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
-	"github.com/samuel-stidham/safetybox/v3/internal/logging"
+	"github.com/samuel-stidham/safetybox/v4/internal/logging"
 
 	"github.com/awnumar/memguard"
 	"github.com/spf13/cobra"
@@ -21,13 +22,6 @@ const (
 	envVault    = "SAFETYBOX_VAULT"
 	envIdentity = "SAFETYBOX_IDENTITY"
 )
-
-// logo is the banner shown at the top of the root help and version
-// output. It spells SAFETYBOX in block glyphs.
-const logo = ` ▗▄▄▖ ▗▄▖ ▗▄▄▄▖▗▄▄▄▖▗▄▄▄▖▗▖  ▗▖▗▄▄▖  ▗▄▖ ▗▖  ▗▖
-▐▌   ▐▌ ▐▌▐▌   ▐▌     █   ▝▚▞▘ ▐▌ ▐▌▐▌ ▐▌ ▝▚▞▘
- ▝▀▚▖▐▛▀▜▌▐▛▀▀▘▐▛▀▀▘  █    ▐▌  ▐▛▀▚▖▐▌ ▐▌  ▐▌
-▗▄▄▞▘▐▌ ▐▌▐▌   ▐▙▄▄▖  █    ▐▌  ▐▙▄▞▘▝▚▄▞▘▗▞▘▝▚▖`
 
 // options holds the global flag values shared by every verb.
 type options struct {
@@ -46,6 +40,13 @@ type options struct {
 func Execute(version string) {
 	root := newRootCmd(version)
 
+	// Flag-parse failures surface before PersistentPreRun installs the
+	// flag-driven logger, so a default-configured one must already be
+	// installed for the error record below. A dry-run parse recovers
+	// --log-json first: without it, a malformed invocation reported its
+	// own error as styled text in a stream the caller asked to keep JSON.
+	logging.Setup(root.ErrOrStderr(), logging.Options{JSON: logJSONRequested(version, os.Args[1:])})
+
 	err := root.Execute()
 	if err == nil {
 		return
@@ -62,10 +63,10 @@ func Execute(version string) {
 		return
 	}
 
-	// SilenceErrors is set on the root, so print the error here rather
+	// SilenceErrors is set on the root, so log the error here rather
 	// than let cobra print it, which is what keeps the exit-code path
 	// above quiet.
-	_, _ = fmt.Fprintln(root.ErrOrStderr(), "Error:", err)
+	slog.Error(err.Error())
 
 	memguard.SafeExit(1)
 }
@@ -74,14 +75,13 @@ func newRootCmd(version string) *cobra.Command {
 	opts := &options{}
 
 	root := &cobra.Command{
-		Use:   "safetybox",
-		Short: "A single-user, versioned secrets vault",
-		Long: logo + "\n\nsafetybox " + version + "\n\n" +
-			"safetybox is a CLI-first secrets manager. Values are sealed in age envelopes. Metadata lives in SQLite.",
+		Use:     "safetybox",
+		Short:   "A single-user, versioned secrets vault",
+		Long:    "Safetybox is a CLI-first secrets manager. Values are sealed in age envelopes. Metadata lives in SQLite.",
 		Version: version,
 		PersistentPreRun: func(preRunCmd *cobra.Command, _ []string) {
-			logging.Setup(logging.Options{Verbose: opts.verbose, JSON: opts.logJSON})
-			warnLooseVaultPerms(preRunCmd, opts)
+			logging.Setup(preRunCmd.ErrOrStderr(), logging.Options{Verbose: opts.verbose, JSON: opts.logJSON})
+			warnLooseVaultPerms(opts)
 		},
 		SilenceUsage: true,
 		// Execute prints errors itself, so the exec exit-code path can
@@ -89,6 +89,12 @@ func newRootCmd(version string) *cobra.Command {
 		// on top of the child's own failure output.
 		SilenceErrors: true,
 	}
+
+	// Help renders through the styled funcs rather than cobra's
+	// templates: the default path buffers usage through UsageString,
+	// which would hide the real writer from color detection.
+	root.SetHelpFunc(styledHelp)
+	root.SetUsageFunc(styledUsage)
 
 	flags := root.PersistentFlags()
 	flags.StringVar(&opts.vaultPath, "vault", "",
@@ -119,6 +125,50 @@ func newRootCmd(version string) *cobra.Command {
 	)
 
 	return root
+}
+
+// logJSONRequested reports whether args ask for JSON logs, read the
+// way the real parse will read them. It routes through cobra's own
+// Find and a dry-run ParseFlags on a throwaway command tree, so every
+// flag arity and exec's non-interspersed rule hold: anything from the
+// exec child command onward belongs to the child and never counts.
+// The probe must be its own tree. Tolerating unknown flags on the
+// real root would make the real parse swallow the very error it
+// exists to report.
+func logJSONRequested(version string, args []string) bool {
+	probe := newRootCmd(version)
+
+	target, flagArgs, err := probe.Find(args)
+	if err != nil {
+		// A mistyped verb still parses root-level flags, so --log-json
+		// is honored on the unknown-command error too.
+		target, flagArgs = probe, args
+	}
+
+	// An unregistered --help returns pflag.ErrHelp, which the allowlist
+	// does not cover, and that stops the dry run before any later
+	// --log-json is recorded. So the default help and version flags
+	// must exist first, the same way cobra's execute registers them.
+	target.InitDefaultHelpFlag()
+	target.InitDefaultVersionFlag()
+
+	// The dry run must survive the unknown flag the real parse is
+	// about to report. The allowlist goes on the command, not the flag
+	// set, because ParseFlags overwrites the flag set's copy.
+	target.FParseErrWhitelist = cobra.FParseErrWhitelist{UnknownFlags: true}
+
+	// A dry-run failure is not an error here. Flags apply left to
+	// right, so everything parsed before the stop is already recorded.
+	// On a stop the allowlist does not cover, such as
+	// --log-json=garbage, that is exactly what the real parse will have
+	// seen when it fails. On an unknown flag the allowlist carries the
+	// probe past the real parse's stop, which is deliberate: the
+	// caller's JSON request still counts in `--bogusflag --log-json`.
+	_ = target.ParseFlags(flagArgs)
+
+	logJSON := target.Flags().Lookup("log-json")
+
+	return logJSON != nil && logJSON.Value.String() == "true"
 }
 
 // resolveVaultPath applies the flag > env > XDG default precedence.

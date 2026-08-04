@@ -59,9 +59,11 @@ safetybox, then third-party, enforced by gci with custom order.
 ## Dependencies
 
 This is a secrets tool, so every module in go.sum is audit surface.
-The dependency list is deliberately short: age, modernc sqlite,
-cobra, memguard, testify, and the x/crypto, x/term, and x/sys
-families. x/sys backs the no-echo prompt's terminal control. One
+The direct dependencies are age, modernc sqlite, cobra, memguard,
+testify, and the x/term and x/sys families. age pulls in x/crypto as
+an indirect module. 4.0 adds charmbracelet log and lipgloss for the
+styled output, and they pull the charm terminal stack in as indirect
+modules. x/sys backs the no-echo prompt's terminal control. One
 test-only dependency, `creack/pty`, allocates a pseudo-terminal for
 the prompt's terminal test and never reaches the shipped binary.
 Justify any addition in the PR description. A `vendor/` directory may

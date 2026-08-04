@@ -8,9 +8,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
-	"github.com/samuel-stidham/safetybox/v3/internal/identity"
-	"github.com/samuel-stidham/safetybox/v3/internal/vault"
+	"github.com/samuel-stidham/safetybox/v4/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v4/internal/identity"
+	"github.com/samuel-stidham/safetybox/v4/internal/vault"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -251,7 +251,7 @@ func rekeyVault(cobraCmd *cobra.Command, opts *options, oldKey, newKey *age.X255
 		return 0, userHint(err)
 	}
 
-	warnIfCheckpointBlocked(cobraCmd, openedVault)
+	warnIfCheckpointBlocked(ctx, openedVault)
 
 	return count, nil
 }

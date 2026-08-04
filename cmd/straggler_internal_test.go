@@ -6,9 +6,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/samuel-stidham/safetybox/v3/internal/envelope"
-	"github.com/samuel-stidham/safetybox/v3/internal/identity"
-	"github.com/samuel-stidham/safetybox/v3/internal/vault"
+	"github.com/samuel-stidham/safetybox/v4/internal/envelope"
+	"github.com/samuel-stidham/safetybox/v4/internal/identity"
+	"github.com/samuel-stidham/safetybox/v4/internal/vault"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -105,7 +105,8 @@ func TestMigrateRepairsAStrandedLegacyEnvelope(t *testing.T) {
 	require.Error(t, err)
 
 	stdout, stderr := fixture.runOK("", "migrate")
-	assert.Contains(t, stderr, "repaired 1 value")
+	assert.Contains(t, stderr, "repaired")
+	assert.Contains(t, stdout, `"migratedVersions": 1`)
 	assert.Contains(t, stdout, `"result": "repaired"`)
 
 	// The original value is readable again, and never had to be retyped.
