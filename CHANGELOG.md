@@ -4,6 +4,48 @@ All notable changes to safetybox are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [4.0.1] - 2026-11-17
+
+A dependency and toolchain refresh. Every module in `go.mod` moved to
+its latest release, with one deliberate exception noted below, and
+the project now builds with Go 1.27. No command, flag,
+output, or on-disk format changed, so no migration is needed.
+
+### Security
+
+- `golang.org/x/crypto` moved from v0.52.0 to v0.59.0. govulncheck
+  reported four advisories against the old version at the module
+  level: GO-2026-6355, GO-2026-6354, GO-2026-6303, and GO-2026-5932.
+  They sit in the `ssh` and `openpgp` packages, which safetybox never
+  imports, so no shipped code path was affected. The scan now reports
+  none of them.
+- The move to Go 1.27 clears GO-2026-6859, a `net/http` server race
+  in the Go 1.26.10 standard library. safetybox runs no HTTP server,
+  so this was also never reachable.
+
+### Changed
+
+- Direct dependencies: `filippo.io/age` v1.3.1 to v1.3.2,
+  `modernc.org/sqlite` v1.53.0 to v1.62.0, `golang.org/x/sys` v0.45.0
+  to v0.50.0, `golang.org/x/term` v0.43.0 to v0.48.0, and the
+  test-only `github.com/stretchr/testify` v1.11.1 to v1.12.1.
+  memguard, cobra, charmbracelet log and lipgloss, and `creack/pty`
+  were already current.
+- Indirect dependencies followed, including `github.com/spf13/pflag`
+  v1.1.0, `github.com/awnumar/memcall` v0.5.0, and the charm terminal
+  stack. `github.com/clipperhouse/displaywidth` and
+  `github.com/clipperhouse/uax29/v2` are new indirect modules pulled
+  in by that stack. testify dropped `go-spew` and `go-difflib` and
+  swapped `gopkg.in/yaml.v3` for `go.yaml.in/yaml/v3`.
+- `modernc.org/libc` is held at v1.80.1 and `modernc.org/memory` at
+  v1.12.1 instead of their latest releases. `modernc.org/sqlite`
+  v1.62.0 is built against exactly those versions, and a mismatched
+  libc is unsupported.
+- safetybox now builds with Go 1.27. The `go` directive moved from
+  `1.26` to `1.27.0`, and `GO_VERSION` in the Makefile and the CI
+  toolchain match. Building from source, including `go install`, now
+  needs Go 1.27 or later. The release binaries are unaffected.
+
 ## [4.0.0] - 2026-08-04
 
 A presentation release. Stderr diagnostics moved to styled, leveled
