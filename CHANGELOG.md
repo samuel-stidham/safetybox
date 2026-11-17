@@ -23,6 +23,16 @@ output, or on-disk format changed, so no migration is needed.
   in the Go 1.26.10 standard library. safetybox runs no HTTP server,
   so this was also never reachable.
 
+### Added
+
+- Dependabot now watches the Go modules and the GitHub Actions. It
+  opens one grouped pull request a week for each against `develop`.
+  Its commits use the chore type, which cuts no release tag, so
+  dependency updates ship with the next release that has a changelog
+  entry. `modernc.org/libc` and `modernc.org/memory` are excluded,
+  for the reason given under Changed. This is repository tooling and
+  does not change the shipped binary.
+
 ### Changed
 
 - Direct dependencies: `filippo.io/age` v1.3.1 to v1.3.2,
