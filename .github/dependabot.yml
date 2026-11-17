@@ -1,0 +1,37 @@
+# Dependabot version updates. One grouped pull request per ecosystem,
+# opened weekly against develop.
+#
+# The commit prefix is chore on purpose. CI cuts a release tag from fix
+# and feat commits on main, and the release job fails without a matching
+# CHANGELOG.md section. A chore commit cuts no tag, so dependency
+# updates wait on develop until a release with curated notes carries
+# them.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      go-deps:
+        patterns: ["*"]
+    ignore:
+      # modernc.org/sqlite is built against exact versions of these two,
+      # and a mismatched libc is unsupported. They move only when a
+      # sqlite update moves them.
+      - dependency-name: modernc.org/libc
+      - dependency-name: modernc.org/memory
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        patterns: ["*"]

@@ -70,6 +70,15 @@ Justify any addition in the PR description. A `vendor/` directory may
 exist locally for offline builds. It stays untracked, and CI resolves
 modules from `go.sum`.
 
+Dependabot opens one grouped pull request a week against `develop` for
+Go modules and another for GitHub Actions. Its commits use the chore
+type, which cuts no release tag, so the updates ship with the next
+release that has a changelog entry. `modernc.org/libc` and
+`modernc.org/memory` are excluded. `modernc.org/sqlite` is built
+against exact versions of both, so they move only when sqlite does.
+Dependabot does not watch the Go standard library. `make vuln` covers
+that.
+
 ## Commits and CI
 
 Commits follow the conventional commit format and are GPG-signed.
