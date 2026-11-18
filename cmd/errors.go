@@ -39,19 +39,43 @@ func (e exitCodeError) Error() string {
 	return fmt.Sprintf("command exited with code %d", e.code)
 }
 
+// hintedError marks an error that already carries its guidance. It
+// is a struct error because userHint must recognize its own output,
+// which a plain wrapped error cannot signal.
+type hintedError struct {
+	err error
+}
+
+func (e hintedError) Error() string {
+	return e.err.Error()
+}
+
+func (e hintedError) Unwrap() error {
+	return e.err
+}
+
 // userHint decorates well-known sentinels with what to do next. This
 // is the cmd boundary where internal errors become user guidance.
+//
+// It attaches the guidance once. migrate hints inside its reseal
+// callback and again around the vault call that runs it, and a second
+// pass used to print the same advice twice.
 func userHint(err error) error {
 	if err == nil {
 		return nil
 	}
 
+	var already hintedError
+	if errors.As(err, &already) {
+		return err
+	}
+
 	if hinted := keyMaterialHint(err); hinted != nil {
-		return hinted
+		return hintedError{err: hinted}
 	}
 
 	if hinted := vaultHint(err); hinted != nil {
-		return hinted
+		return hintedError{err: hinted}
 	}
 
 	return err

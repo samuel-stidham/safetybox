@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/samuel-stidham/safetybox/v4/internal/envelope"
@@ -160,7 +161,34 @@ func TestMigrateDoesNotRepairARealTamper(t *testing.T) {
 	_, _, err = fixture.run("", "migrate")
 
 	require.Error(t, err, "corruption must not be silently rewritten")
-	assert.NotErrorIs(t, err, vault.ErrEnvelopeCurrent)
+	require.NotErrorIs(t, err, vault.ErrEnvelopeCurrent)
+	assert.Equal(t, 1, strings.Count(err.Error(), "the identity may not match this vault"),
+		"the advice must print once, not once per layer: %v", err)
+}
+
+// TestMigrateHintsOnceOnACorruptLegacyEnvelope covers the same advice on
+// the format upgrade path. The resealer and runMigrate both ask for
+// the hint, and a corrupt envelope used to print it twice.
+func TestMigrateHintsOnceOnACorruptLegacyEnvelope(t *testing.T) {
+	fixture := newCLIFixture(t)
+
+	fixture.runOK("fake-value\n", "set", "api/corrupt")
+
+	downgradeToV1(t, fixture)
+
+	handle, err := sql.Open("sqlite", "file:"+fixture.vaultPath)
+	require.NoError(t, err)
+
+	_, err = handle.ExecContext(t.Context(),
+		"UPDATE secret_version SET envelope = ? WHERE id = 1", []byte("not-an-envelope-at-all"))
+	require.NoError(t, err)
+	require.NoError(t, handle.Close())
+
+	_, _, err = fixture.run("", "migrate")
+
+	require.ErrorIs(t, err, envelope.ErrDecryptFailed)
+	assert.Equal(t, 1, strings.Count(err.Error(), "the identity may not match this vault"),
+		"the advice must print once, not once per layer: %v", err)
 }
 
 // readVaultBytes returns the vault file's contents, for proving a run
