@@ -5,7 +5,7 @@ in it.
 
 ## Install
 
-Build from source with Go 1.26 or later.
+Build from source with Go 1.27 or later.
 
 ```sh
 git clone https://github.com/samuel-stidham/safetybox.git

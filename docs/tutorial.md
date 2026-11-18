@@ -11,7 +11,7 @@ If you want the terse version of any command, the
 
 ## 1. Install
 
-You need Go 1.26 or later to build from source.
+You need Go 1.27 or later to build from source.
 
 ```sh
 go install github.com/samuel-stidham/safetybox/v4@latest

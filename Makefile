@@ -1,7 +1,7 @@
 BIN            := safetybox
 PKG            := github.com/samuel-stidham/$(BIN)/v4
 LOCAL_VERSION  := $(shell git describe --tags --always --dirty)
-GO_VERSION     := 1.26
+GO_VERSION     := 1.27.0
 GOBIN          := $(shell go env GOPATH)/bin
 GOVULNCHECK_VERSION := v1.6.0
 # The identity uses a real scrypt KDF, which is deliberately slow, and the
