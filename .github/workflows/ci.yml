@@ -102,7 +102,7 @@ jobs:
 
       - name: Bump version from conventional commits
         id: bump
-        uses: mathieudutour/github-tag-action@v6.2
+        uses: mathieudutour/github-tag-action@v7
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           tag_prefix: v
