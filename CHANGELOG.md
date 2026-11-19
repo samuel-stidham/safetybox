@@ -4,6 +4,22 @@ All notable changes to safetybox are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [4.0.2] - 2026-11-18
+
+A one-line fix to an error message. No command, flag, JSON output, or
+on-disk format changed, so no migration is needed.
+
+### Fixed
+
+- `safetybox migrate` printed the "identity may not match this vault"
+  advice twice when it met an envelope it could not decrypt. The
+  reseal callback attached the hint and so did the command around it.
+  The hint is now attached once however many layers ask for it, which
+  also guards the other commands against the same repeat. Both
+  migrate paths are covered: the format upgrade and the
+  repair of values stranded in the old frame. The error still wraps
+  the same sentinels, so only the repeated text is gone.
+
 ## [4.0.1] - 2026-11-17
 
 A dependency and toolchain refresh. Every module in `go.mod` moved to
