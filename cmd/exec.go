@@ -63,7 +63,7 @@ func runExec(cobraCmd *cobra.Command, opts *options, args []string) error {
 
 	// The input is the user's own command line, which is the entire
 	// purpose of the exec verb, so it is not tainted. The gosec G204
-	// exclusion for this file is recorded in docs/linting.md.
+	// exclusion for this file is recorded in .golangci.yml.
 	child := osexec.CommandContext(cobraCmd.Context(), args[0], args[1:]...)
 
 	child.Stdin = cobraCmd.InOrStdin()

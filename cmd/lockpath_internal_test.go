@@ -46,7 +46,7 @@ func TestLockPathConvergesForAliasSpellings(t *testing.T) {
 // the inode would mean flocking the database itself, and mixing flock
 // with SQLite's POSIX locks carries platform risk judged not worth it
 // for a single-user tool where the aliasing is self-inflicted. The limit
-// is documented in docs/security.md.
+// is documented in the security model of the safetybox-docs site.
 //
 // This test exists so the behaviour is visible and tracked. If someone
 // later makes hardlinks converge, this test fails and points at the doc
@@ -70,7 +70,7 @@ func TestLockPathDivergesForHardlinks(t *testing.T) {
 
 	assert.NotEqual(t, lockSiblingPath(vaultPath), lockSiblingPath(hardlinkPath),
 		"known limit, issue #11: hard-linked spellings derive separate locks. "+
-			"If this now converges, update docs/security.md and close the issue")
+			"If this now converges, update the security model in safetybox-docs and close the issue")
 }
 
 // TestBothHardlinkSpellingsCanLockAtOnce shows the consequence of the
