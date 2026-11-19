@@ -100,32 +100,31 @@ variables.
 
 ## Documentation
 
-The full documentation lives in [docs/](docs/).
+The full documentation lives at
+[samuel-stidham.github.io/safetybox-docs](https://samuel-stidham.github.io/safetybox-docs/). It covers
+safetybox and sanctuary together, and its source is the
+[safetybox-docs](https://github.com/samuel-stidham/safetybox-docs)
+repository.
 
-- [Getting started](docs/getting-started.md) takes you from install to
-  your first rotated secret.
-- [Tutorial](docs/tutorial.md) is the guided tour, from install through
-  every command in order, including moving a vault between machines.
-- [Command reference](docs/commands.md) covers every verb, flag, and
-  output shape.
-- [Configuration](docs/configuration.md) covers paths, precedence, and
-  the global flags.
-- [Security model](docs/security.md) explains the layers, the
+- [Getting started](https://samuel-stidham.github.io/safetybox-docs/getting-started.html) takes you from
+  install to your first rotated secret.
+- [Tutorial](https://samuel-stidham.github.io/safetybox-docs/tutorial.html) is the guided tour, from install
+  through every command in order, including moving a vault between
+  machines.
+- [Command reference](https://samuel-stidham.github.io/safetybox-docs/commands.html) covers every verb, flag,
+  and output shape.
+- [Configuration](https://samuel-stidham.github.io/safetybox-docs/configuration.html) covers paths, precedence,
+  and the global flags.
+- [Security model](https://samuel-stidham.github.io/safetybox-docs/security.html) explains the layers, the
   invariants, and the limits.
-- [Architecture](docs/architecture.md) explains the packages, the data
-  model, and the address binding.
-- [Development](docs/development.md) covers building, testing, and the
-  release pipeline.
-- [Linting policy](docs/linting.md) records every linter exception and
-  its justification.
 
 ## Configuration
 
 The vault lives at `$XDG_DATA_HOME/safetybox/vault.db`. The identity
 lives at `$XDG_CONFIG_HOME/safetybox/identity.age`. Both paths can be
 overridden. A flag beats an environment variable, and both beat the
-default. The [configuration guide](docs/configuration.md) has the
-details.
+default. The [configuration guide](https://samuel-stidham.github.io/safetybox-docs/configuration.html)
+has the details.
 
 ```sh
 safetybox --vault /path/to/vault.db --identity /path/to/identity.age ...
@@ -145,7 +144,7 @@ redacts. The vault file is created `0600` and the identity file is
 `0600` inside a `0700` directory.
 
 There is no plaintext storage mode and none will be added. The
-[security model](docs/security.md) documents the full set of
+[security model](https://samuel-stidham.github.io/safetybox-docs/security.html) documents the full set of
 invariants and what safetybox does not defend against.
 
 ## Development
@@ -155,8 +154,7 @@ invariants and what safetybox does not defend against.
 with a `-dev` version suffix, so a test build never masquerades as an
 installed one. Linting runs `gofumpt`, `gci`, and
 `golangci-lint`, and CI fails if they would change anything. Tests run
-against real SQLite and real age keys, with no mocks. The
-[development guide](docs/development.md) covers the rest.
+against real SQLite and real age keys, with no mocks.
 
 ## Releases
 

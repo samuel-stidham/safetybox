@@ -67,6 +67,13 @@ needed. Usage errors are reworded, so a script that matched the old
   [sanctuary](https://github.com/samuel-stidham/sanctuary), the Rust
   version of safetybox. Both are developed and actively maintained
   side by side by the same author.
+- The documentation moved out of this repository to
+  [safetybox-docs](https://github.com/samuel-stidham/safetybox-docs),
+  which is served at
+  <https://samuel-stidham.github.io/safetybox-docs/> and covers
+  safetybox and sanctuary together. The pages under `docs/` are gone
+  and the README links to the site. The logo files stay in
+  `docs/assets/`. The linting policy now lives as comments in `.golangci.yml`.
 
 ## [4.0.2] - 2026-11-18
 

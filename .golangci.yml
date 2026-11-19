@@ -117,8 +117,12 @@ linters:
         - i int
         - ok bool
   exclusions:
-    # Test-file exclusions are justified linter by linter in
-    # docs/linting.md. Add nothing here without a matching entry.
+    # Linting policy. Findings get fixed, not suppressed. When a linter
+    # is wrong for a whole class of files, the exclusion lives here with
+    # its justification in a comment beside it. Add nothing here without
+    # one. There are no inline nolint comments, so a suppression is never
+    # hidden at a call site. Production code answers to every linter,
+    # with the one G204 exception below.
     # File-specific paths use the (^|/) prefix, not a leading ^, so they
     # match whether golangci-lint reports a repo-relative path or one
     # prefixed by the working directory. Running from a differently cased
@@ -127,14 +131,27 @@ linters:
     rules:
       - path: _test\.go
         linters:
+          # Tests often check only the error from a multi-return call,
+          # and blank identifiers say so most clearly.
           - dogsled
+          # Table-driven tests repeat structure on purpose. Deduping
+          # them makes failures harder to read.
           - dupl
+          # Tests compare and unwrap errors through testify helpers,
+          # which handle wrapping themselves.
           - errorlint
+          # A test that walks a full lifecycle reads best as one story.
           - funlen
+          # Repeating a literal keeps each test self-contained.
           - goconst
+          # Magic numbers in tests are the expected values themselves.
           - mnd
+          # Preallocation gains a test fixture nothing and costs clarity.
           - prealloc
+          # Test helpers keep parameters that currently receive one
+          # value so the next test can vary them.
           - unparam
+          # Short names like tt and tx are idiomatic inside tests.
           - varnamelen
       # G301, G302, G304 only. Tests build file paths from t.TempDir
       # and create fixtures with deliberately chosen (often loose)
@@ -147,7 +164,7 @@ linters:
       # G204 in one file only. The shell round-trip test deliberately
       # runs reveal's own quoted output in a real shell to prove the
       # quoting is injection-safe. G204 stays active for every other
-      # test. See docs/linting.md.
+      # test.
       - path: (^|/)cmd/review_fixes_internal_test\.go$
         text: "G204"
         linters:
@@ -155,16 +172,16 @@ linters:
       # wrapcheck, io.Reader.Read pass-through only. The wiping-reader
       # test double must hand the source error through verbatim, since
       # the reader under test detects end of input from it. wrapcheck
-      # stays active for every other error in tests. See
-      # docs/linting.md.
+      # stays active for every other error in tests.
       - path: (^|/)internal/secret/secret_test\.go$
         text: 'sig: func \(io\.Reader\)\.Read'
         linters:
           - wrapcheck
       # G204 in cmd/exec.go only. The exec verb runs the operator's own
       # argv, which is its entire purpose, so the input is not tainted.
-      # G204 stays active everywhere else in production. See
-      # docs/linting.md.
+      # G204 stays active everywhere else in production. Within the file
+      # it covers every line, current and future, so review any new
+      # subprocess call added there by hand.
       - path: (^|/)cmd/exec\.go$
         text: "G204"
         linters:
