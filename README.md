@@ -15,6 +15,12 @@ safetybox is feature complete for its single-user scope.
 Keep an offsite backup of the identity file, because no passphrase can
 recover the vault without it.
 
+## Sanctuary, the Rust version
+
+[sanctuary](https://github.com/samuel-stidham/sanctuary) is the Rust
+version of safetybox. The same author develops and actively maintains
+both, side by side, and the two are kept on the same behavior.
+
 ## How it works
 
 The vault stores your public key, called the recipient. Writing a secret

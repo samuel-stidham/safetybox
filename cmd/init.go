@@ -26,7 +26,7 @@ func newInitCmd(opts *options) *cobra.Command {
 		Short: "Create a new identity and vault",
 		Long: "init generates an X25519 identity, encrypts it with a passphrase, " +
 			"creates the vault, and runs a seal/open self-test.",
-		Args: cobra.NoArgs,
+		Args: noArgs(),
 		RunE: func(cobraCmd *cobra.Command, _ []string) error {
 			return runInit(cobraCmd, opts)
 		},

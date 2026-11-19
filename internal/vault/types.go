@@ -3,6 +3,7 @@ package vault
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"time"
 )
 
@@ -126,6 +127,21 @@ func CanonicalAddress(name string, number int64) string {
 // nameGrammar is compiled once at package load and enforced by
 // [ValidateName], which documents the grammar itself.
 var nameGrammar = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$`)
+
+// printableName renders a secret name read from the vault for an error
+// message. A name the grammar allows prints as it is. Anything else is
+// quoted and escaped.
+//
+// The grammar is enforced on write, but the vault file can be edited
+// directly. A name edited to hold a newline would otherwise forge a log
+// line, and one holding an escape sequence would drive the terminal.
+func printableName(name string) string {
+	if nameGrammar.MatchString(name) {
+		return name
+	}
+
+	return strconv.Quote(name)
+}
 
 // ValidateName enforces the hierarchical name grammar: segments of
 // letters, digits, dots, underscores, and dashes, joined by single

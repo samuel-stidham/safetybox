@@ -266,14 +266,21 @@ variable name. exec skips such a secret with a warning instead of
 injecting a malformed entry. A reserved env name is skipped the same
 way. A value that holds a NUL byte cannot become an environment variable
 either, so exec skips it with a warning that names it and runs the
-command with the rest. A secret whose sealed env name or expiry no
-longer matches its columns is skipped too. One such mismatch never
-denies every variable to the child.
+command with the rest. On Linux a value too large for one environment
+variable is skipped the same way. The kernel refuses to start a program
+when a single `NAME=value` string is over 32 pages, which is 131072
+bytes with 4 KiB pages, so one such secret would otherwise fail every
+command. A secret whose sealed env name or expiry no longer matches its
+columns is skipped too. One such mismatch never denies every variable to
+the child.
 
 A skipped secret's variable is removed from the child's environment
 rather than left as the parent had it. Otherwise the child would read a
 stale value under that name and could not tell it from the real secret.
-The variable survives only when another secret legitimately supplies it.
+This covers a secret skipped for its value as well as one skipped for a
+mismatch. The variable survives when another secret legitimately
+supplies it. A reserved name such as `PATH` is never removed, so the
+child keeps the value it inherited.
 
 When two secrets share an env name the later one wins in the child
 environment, and exec warns about the override.

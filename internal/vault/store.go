@@ -767,17 +767,17 @@ func (v *Vault) Rekey(ctx context.Context, newRecipient string, reseal Resealer)
 
 		err := fetch.QueryRowContext(ctx, version.id).Scan(&envelope)
 		if err != nil {
-			return 0, fmt.Errorf("read %s version %d: %w", version.name, version.number, err)
+			return 0, fmt.Errorf("read %s version %d: %w", printableName(version.name), version.number, err)
 		}
 
 		resealed, err := reseal(version.name, version.number, envelope)
 		if err != nil {
-			return 0, fmt.Errorf("reseal %s version %d: %w", version.name, version.number, err)
+			return 0, fmt.Errorf("reseal %s version %d: %w", printableName(version.name), version.number, err)
 		}
 
 		if _, err := txn.ExecContext(ctx,
 			"UPDATE secret_version SET envelope = ? WHERE id = ?", resealed, version.id); err != nil {
-			return 0, fmt.Errorf("store resealed %s version %d: %w", version.name, version.number, err)
+			return 0, fmt.Errorf("store resealed %s version %d: %w", printableName(version.name), version.number, err)
 		}
 	}
 

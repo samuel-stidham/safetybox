@@ -295,14 +295,14 @@ func resealOneVersion(
 	var oldEnvelope []byte
 
 	if err := fetch.QueryRowContext(ctx, version.id).Scan(&oldEnvelope); err != nil {
-		return fmt.Errorf("read %s version %d: %w", version.name, version.number, err)
+		return fmt.Errorf("read %s version %d: %w", printableName(version.name), version.number, err)
 	}
 
 	resealed, sealedEnvName, err := reseal(
 		version.name, version.number, version.envName, version.expiresAt, oldEnvelope,
 	)
 	if err != nil {
-		return fmt.Errorf("reseal %s version %d: %w", version.name, version.number, err)
+		return fmt.Errorf("reseal %s version %d: %w", printableName(version.name), version.number, err)
 	}
 
 	if sealedEnvName != version.envName {
@@ -318,7 +318,7 @@ func resealOneVersion(
 
 	if _, err := txn.ExecContext(ctx,
 		"UPDATE secret_version SET envelope = ? WHERE id = ?", resealed, version.id); err != nil {
-		return fmt.Errorf("store resealed %s version %d: %w", version.name, version.number, err)
+		return fmt.Errorf("store resealed %s version %d: %w", printableName(version.name), version.number, err)
 	}
 
 	return nil
@@ -360,7 +360,7 @@ func reconcileEnvName(ctx context.Context, txn *sql.Tx, name, sealedEnvName stri
 
 	if _, err := txn.ExecContext(ctx,
 		"UPDATE secret SET env_name = ? WHERE name = ?", column, name); err != nil {
-		return fmt.Errorf("reconcile env name for %s: %w", name, err)
+		return fmt.Errorf("reconcile env name for %s: %w", printableName(name), err)
 	}
 
 	return nil

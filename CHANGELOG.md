@@ -4,6 +4,70 @@ All notable changes to safetybox are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 versions follow [Semantic Versioning](https://semver.org/).
 
+## [4.0.3] - 2026-11-19
+
+Five bug fixes, three of them with a security bearing. No command,
+flag, JSON output, or on-disk format changed, so no migration is
+needed. Usage errors are reworded, so a script that matched the old
+`accepts 1 arg(s), received 2` text will not match the new one.
+
+### Security
+
+- `rekey` and `migrate` printed a tampered secret name unescaped. The
+  error for a version they could not re-seal took the name from the
+  vault file as stored. A name edited to hold a newline forged a log
+  line, and one holding an escape sequence drove the terminal. A name
+  the grammar does not allow is now quoted and escaped, in the reseal
+  errors of both verbs and in the env name reconcile error of
+  `migrate`. A valid name prints exactly as before. Editing the vault
+  file needs write access to it. (#29)
+- `exec` left a stale inherited variable in place when it skipped a
+  secret for its value. A secret whose value holds a NUL byte was
+  skipped with a warning, and a value the calling shell already held
+  under that name stayed visible to the child, which could not tell it
+  from the secret. The variable is now cleared, the way it already was
+  for a metadata mismatch, and `exec` warns about the clearing only
+  when it really held the variable. `reveal --env --format sh` now
+  writes `unset NAME` for such a secret, and the fish format writes
+  `set --erase NAME`. A reserved name such as `PATH` is never cleared
+  or erased on any skip path, so the child and the sourcing shell keep
+  the value they had. (#28)
+- Usage errors repeated a stray argument. `init`, `passwd`, `rekey`,
+  `migrate`, and `stale` take no arguments, and given one they quoted
+  it back on stderr and in the JSON log. A value pasted in the wrong
+  place is the usual way a secret reaches a command line. Every verb
+  now reports only the count it accepts, as in `too many arguments:
+  rekey accepts no arguments` and `too many arguments: set accepts 1
+  argument`. An unknown verb name at the top level, such as
+  `safetybox bogus`, is still echoed. (#26)
+
+### Fixed
+
+- `rekey` committed the vault to the new key and then failed the
+  identity swap when `--identity` or `SAFETYBOX_IDENTITY` was not a
+  clean path, such as one holding `absent/..`. The vault was left
+  sealed to a key that sat in `identity.age.new`, and every read
+  failed. The identity and vault paths from a flag or an environment
+  variable are now cleaned once, so the load, the staging, and the
+  swap agree on one spelling. The default paths were already clean. A
+  vault left in this state by an earlier release recovers on the next
+  read once the identity path is given in its clean form. (#25)
+- `exec` failed for every command when one env-named secret was over
+  the per-variable size limit. Linux refuses to start a program when a
+  single `NAME=value` string is over 32 pages, which is 131072 bytes
+  with 4 KiB pages, and the error did not name the secret. `exec` now
+  skips such a secret with a warning that names it and gives the
+  largest value the name can hold, and the rest inject. The check runs
+  on Linux only, because other systems limit the total size and not
+  each string. The total size limit still applies. (#27)
+
+### Changed
+
+- The README now points to
+  [sanctuary](https://github.com/samuel-stidham/sanctuary), the Rust
+  version of safetybox. Both are developed and actively maintained
+  side by side by the same author.
+
 ## [4.0.2] - 2026-11-18
 
 A one-line fix to an error message. No command, flag, JSON output, or

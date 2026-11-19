@@ -42,7 +42,7 @@ func newSetCmd(opts *options) *cobra.Command {
 			"terminal, and appends it as a new enabled version. Values never " +
 			"come from arguments. Prior versions stay enabled unless " +
 			"--revoke-previous is passed.",
-		Args: cobra.ExactArgs(1),
+		Args: exactArgs(1),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
 			return runSet(cobraCmd, opts, args[0], flags)
 		},

@@ -17,7 +17,7 @@ func newPasswdCmd(opts *options) *cobra.Command {
 		Long: "passwd decrypts the identity with the current passphrase and " +
 			"re-encrypts it with a new one. The key itself does not change, " +
 			"so the vault is untouched.",
-		Args: cobra.NoArgs,
+		Args: noArgs(),
 		RunE: func(cobraCmd *cobra.Command, _ []string) error {
 			return runPasswd(cobraCmd, opts, newPassphraseFile)
 		},
