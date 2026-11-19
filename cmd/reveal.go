@@ -61,7 +61,7 @@ func newRevealCmd(opts *options) *cobra.Command {
 			"--env, or --prefix select a batch that decrypts with a single " +
 			"passphrase read. --format sh or fish emits assignment lines " +
 			"ready to source into a shell session.",
-		Args: cobra.ArbitraryArgs,
+		Args: argCount(0, unboundedArgs),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
 			if err := validateRevealRequest(args, flags, opts.jsonCompact); err != nil {
 				return err
@@ -290,6 +290,13 @@ func printShellAssignments(
 		if reason := shellUsable(output); reason != "" {
 			slog.Warn("secret skipped", "name", output.Name, "reason", reason)
 
+			// A secret withheld for its value still names a variable the
+			// sourcing shell expects, so it is erased like a mismatch skip.
+			// eraseSkipped leaves an invalid or reserved name alone.
+			if output.EnvName != nil {
+				skipped = append(skipped, vault.Entry{Name: output.Name, EnvName: *output.EnvName})
+			}
+
 			continue
 		}
 
@@ -317,18 +324,29 @@ func printShellAssignments(
 // Erasing makes the variable absent, which the caller can test for.
 //
 // A name another secret legitimately supplied is left alone, since that
-// value is current rather than stale.
+// value is current rather than stale. A reserved name is left alone too:
+// erasing PATH in the sourcing shell would be as harmful as setting it.
 func eraseSkipped(
 	cobraCmd *cobra.Command, skipped []vault.Entry, delivered map[string]string, format string,
 ) error {
+	erased := make(map[string]struct{}, len(skipped))
+
 	for _, entry := range skipped {
-		if entry.EnvName == "" || !isShellIdentifier(entry.EnvName) {
+		if !clearsWhenWithheld(entry.EnvName) {
 			continue
 		}
 
 		if _, supplied := delivered[entry.EnvName]; supplied {
 			continue
 		}
+
+		// Two skipped secrets can share an env name. One erase line is
+		// enough.
+		if _, done := erased[entry.EnvName]; done {
+			continue
+		}
+
+		erased[entry.EnvName] = struct{}{}
 
 		if _, err := fmt.Fprintln(cobraCmd.OutOrStdout(), eraseLine(format, entry.EnvName)); err != nil {
 			return fmt.Errorf("write shell erase: %w", err)

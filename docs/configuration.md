@@ -31,7 +31,9 @@ values never come from the environment or from arguments.
 ## Global flags
 
 `--vault` and `--identity` override the paths above. They apply to
-every verb.
+every verb. A path from a flag or an environment variable is cleaned
+before use, so `a/../b/vault.db` is read as `b/vault.db` and every step
+of a verb works on the same spelling.
 
 `--passphrase-file` reads the identity passphrase from a file instead
 of prompting. Use it for scripts and automation. The file should be

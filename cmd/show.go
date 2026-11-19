@@ -21,7 +21,7 @@ func newShowCmd(opts *options) *cobra.Command {
 		Short: "Print a secret's metadata, never its value",
 		Long: "show prints existence, timestamps, expiry state, and version " +
 			"history. It needs no identity and decrypts nothing.",
-		Args: cobra.ExactArgs(1),
+		Args: exactArgs(1),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
 			return runShow(cobraCmd, opts, args[0])
 		},

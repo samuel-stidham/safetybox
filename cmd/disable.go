@@ -24,7 +24,7 @@ func newDisableCmd(opts *options) *cobra.Command {
 		Short: "Disable a secret version",
 		Long: "disable takes one version out of resolution without touching " +
 			"its envelope. get resolves the newest remaining enabled version.",
-		Args: cobra.ExactArgs(disableArgCount),
+		Args: exactArgs(disableArgCount),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
 			number, err := strconv.ParseInt(args[1], 10, 64)
 			if err != nil {

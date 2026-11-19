@@ -216,7 +216,10 @@ stderr, and exit code all pass through.
 A child killed by a signal reports 128 plus the signal number, the way
 a shell does. A secret whose value holds a NUL byte cannot become an
 environment variable, so `exec` skips it with a warning that names it
-and runs the command with the rest.
+and runs the command with the rest. On Linux the same goes for a value
+too large for one variable. A skipped secret's variable is removed from
+the child's environment, so the child never reads a stale value under
+that name.
 
 ## 11. Set an expiry and find stale secrets
 

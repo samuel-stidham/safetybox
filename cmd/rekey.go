@@ -30,7 +30,7 @@ func newRekeyCmd(opts *options) *cobra.Command {
 			"non-destroyed version to it inside one transaction, and swaps " +
 			"the identity file. The old identity is kept as a .bak sibling. " +
 			"The passphrase stays the same, use passwd to change it.",
-		Args: cobra.NoArgs,
+		Args: noArgs(),
 		RunE: func(cobraCmd *cobra.Command, _ []string) error {
 			return runRekey(cobraCmd, opts)
 		},
@@ -242,7 +242,7 @@ func rekeyVault(cobraCmd *cobra.Command, opts *options, oldKey, newKey *age.X255
 			// so the env name and expiry stay bound to their version.
 			resealed, err := envelope.Seal(newKey.Recipient(), address, bound, value)
 			if err != nil {
-				return nil, fmt.Errorf("reseal %s: %w", address, err)
+				return nil, fmt.Errorf("reseal %q: %w", address, err)
 			}
 
 			return resealed, nil

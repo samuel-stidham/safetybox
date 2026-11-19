@@ -10,7 +10,7 @@ func newDeleteCmd(opts *options) *cobra.Command {
 		Short: "Soft-delete a secret",
 		Long: "delete hides the secret from list and get. Versions and " +
 			"envelopes stay intact. set revives it, purge destroys it.",
-		Args: cobra.ExactArgs(1),
+		Args: exactArgs(1),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
 			return runDelete(cobraCmd, opts, args[0])
 		},

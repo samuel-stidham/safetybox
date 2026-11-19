@@ -30,7 +30,7 @@ func newGetCmd(opts *options) *cobra.Command {
 		Long: "get decrypts the newest enabled version, verifies its address " +
 			"binding, and prints metadata with the value redacted. Use " +
 			"reveal to display the plaintext.",
-		Args: cobra.ExactArgs(1),
+		Args: exactArgs(1),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
 			return runGet(cobraCmd, opts, args[0])
 		},

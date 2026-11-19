@@ -10,7 +10,7 @@ func newStaleCmd(opts *options) *cobra.Command {
 		Short: "List secrets past their expiry",
 		Long: "stale lists secrets whose expiry has passed. They still " +
 			"resolve. Expiry is a staleness flag, never a deletion trigger.",
-		Args: cobra.NoArgs,
+		Args: noArgs(),
 		RunE: func(cobraCmd *cobra.Command, _ []string) error {
 			return runStale(cobraCmd, opts)
 		},

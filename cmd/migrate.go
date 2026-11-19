@@ -41,7 +41,7 @@ func newMigrateCmd(opts *options) *cobra.Command {
 			"metadata edit is detectable on read. It needs your passphrase, " +
 			"because re-sealing decrypts each value. The identity and the " +
 			"recipient do not change. Back up the vault file first.",
-		Args: cobra.NoArgs,
+		Args: noArgs(),
 		RunE: func(cobraCmd *cobra.Command, _ []string) error {
 			return runMigrate(cobraCmd, opts)
 		},

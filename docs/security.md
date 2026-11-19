@@ -98,7 +98,11 @@ otherwise keep it and never learn the real secret was withheld. `exec`
 removes the variable from the child's environment. `reveal --format sh`
 emits `unset NAME`, and the fish format emits `set --erase NAME`, so a
 sourcing shell drops its own value too. Absent is a state the caller can
-test for. Stale is not.
+test for. Stale is not. The same clearing applies to a secret withheld
+for its value, such as one that holds a NUL byte. A reserved name such
+as `PATH` is the exception. It is never cleared or erased, because
+taking the inherited value away would hand a vault row the same control
+that supplying it would.
 
 The stored recipient is the attacker's other target. A write to
 `vault_meta` could point new secrets at a key the attacker controls.

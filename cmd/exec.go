@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	osexec "os/exec"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -21,6 +22,11 @@ import (
 // signal: 128 plus the signal number.
 const signalExitBase = 128
 
+// maxArgStringPages is Linux's MAX_ARG_STRLEN in pages. The kernel
+// refuses to start a program when one environment string, counted with
+// its terminator, is longer than this many pages.
+const maxArgStringPages = 32
+
 func newExecCmd(opts *options) *cobra.Command {
 	execCmd := &cobra.Command{
 		Use:   "exec -- <command> [args...]",
@@ -32,7 +38,7 @@ func newExecCmd(opts *options) *cobra.Command {
 			"safetybox's own flags must come before the command. Everything " +
 			"from the command name onward belongs to the child, so a child " +
 			"flag never changes which vault or identity safetybox reads.",
-		Args: cobra.MinimumNArgs(1),
+		Args: argCount(1, unboundedArgs),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
 			return runExec(cobraCmd, opts, args)
 		},
@@ -142,6 +148,11 @@ func buildSecretEnv(cobraCmd *cobra.Command, opts *options) ([]string, error) {
 
 	var notInjectable int
 
+	// withheld holds the secrets refused for their value. Unlike a name
+	// that is invalid or reserved, the name here is one the child expects
+	// to read, so a value the parent already held under it is stale.
+	var withheld []vault.Entry
+
 	// exec always selects a batch by env-name filter, never a single
 	// explicit name, so a mismatching secret is skipped with a warning
 	// rather than aborting the run and denying every variable to the child.
@@ -151,6 +162,10 @@ func buildSecretEnv(cobraCmd *cobra.Command, opts *options) ([]string, error) {
 				slog.Warn("secret skipped", "name", entry.Name, "reason", reason)
 
 				notInjectable++
+
+				if clearsWhenWithheld(entry.EnvName) {
+					withheld = append(withheld, entry)
+				}
 
 				return nil
 			}
@@ -170,7 +185,7 @@ func buildSecretEnv(cobraCmd *cobra.Command, opts *options) ([]string, error) {
 		return nil, err
 	}
 
-	kept := withoutSkipped(env, skipped, sourceOf)
+	kept := withoutSkipped(env, skipped, withheld, sourceOf)
 
 	// sourceOf holds one entry per delivered variable, so its length is
 	// what the child actually sees: a collision collapses to one.
@@ -186,7 +201,8 @@ func buildSecretEnv(cobraCmd *cobra.Command, opts *options) ([]string, error) {
 // envInjectable explains why an entry cannot become a child environment
 // variable. An empty reason means it can. It mirrors reveal's
 // shellUsable, so the two batch verbs refuse the same things for the
-// same stated reasons.
+// same stated reasons. The size limit is the one exception: it belongs to
+// starting a program, and a sourcing shell holds a larger value.
 func envInjectable(entry vault.Entry, value secret.Value) string {
 	switch {
 	case !isShellIdentifier(entry.EnvName):
@@ -202,9 +218,43 @@ func envInjectable(entry vault.Entry, value secret.Value) string {
 		// environment, which would fail every command exec runs. Skipping
 		// the one secret keeps a binary value from denying the verb.
 		return "value contains a NUL byte, which an environment variable cannot hold"
+	case tooLargeForEnv(entry.EnvName, value):
+		// One oversized string makes the kernel refuse the whole exec, so
+		// every command would fail, including ones that never read this
+		// secret. Skipping the one secret keeps the rest of the batch.
+		return fmt.Sprintf("value is too large for an environment variable, which holds at most %d bytes under this name",
+			maxEnvValueBytes(entry.EnvName))
 	default:
 		return ""
 	}
+}
+
+// tooLargeForEnv reports whether NAME=value is longer than the kernel
+// accepts for one environment string. Only Linux limits each string.
+// Other systems limit the total size, which cannot be pinned on one
+// secret, so nothing is refused there.
+func tooLargeForEnv(envName string, value secret.Value) bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+
+	return len(value.Expose()) > maxEnvValueBytes(envName)
+}
+
+// maxEnvValueBytes is the longest value envName can carry on Linux. The
+// string the kernel measures is the name, the equals sign, the value, and
+// the terminating NUL.
+func maxEnvValueBytes(envName string) int {
+	return maxArgStringPages*os.Getpagesize() - len(envName) - len("=") - 1
+}
+
+// clearsWhenWithheld reports whether a secret refused by envInjectable
+// should have its variable cleared. That holds for a secret refused for
+// its value. A name that is not an identifier cannot be addressed, and a
+// reserved name is skipped precisely so the child keeps the value it
+// inherited, such as the real PATH.
+func clearsWhenWithheld(envName string) bool {
+	return isShellIdentifier(envName) && !isReservedEnvName(envName)
 }
 
 // withoutSkipped removes every variable a skipped secret was supposed to
@@ -218,39 +268,72 @@ func envInjectable(entry vault.Entry, value secret.Value) string {
 //
 // A skipped secret whose env name another secret legitimately supplied is
 // left alone, since that name is not stale.
-func withoutSkipped(env []string, skipped []vault.Entry, delivered map[string]string) []string {
-	toClear := staleEnvNames(skipped, delivered)
-	if len(toClear) == 0 {
+//
+// skipped holds the metadata-mismatch skips, whose clearing always warns.
+// withheld holds the secrets refused for their value, such as one with a
+// NUL byte. Those already warned when they were skipped, so the clearing
+// warns only when this process really held the variable, and a clean
+// environment prints nothing more.
+func withoutSkipped(env []string, skipped, withheld []vault.Entry, delivered map[string]string) []string {
+	mismatched := staleEnvNames(skipped, delivered)
+	refused := staleEnvNames(withheld, delivered)
+
+	if len(mismatched) == 0 && len(refused) == 0 {
 		return env
 	}
 
 	kept := make([]string, 0, len(env))
+	held := make(map[string]struct{})
 
 	for _, assignment := range env {
 		name, _, _ := strings.Cut(assignment, "=")
 
-		if _, drop := toClear[name]; drop {
+		_, isMismatched := mismatched[name]
+		_, isRefused := refused[name]
+
+		if isMismatched || isRefused {
+			held[name] = struct{}{}
+
 			continue
 		}
 
 		kept = append(kept, assignment)
 	}
 
-	for name := range toClear {
-		slog.Warn("variable cleared from the environment, so the child cannot read a stale value", "env_name", name)
+	for name := range refused {
+		if _, wasHeld := held[name]; !wasHeld {
+			continue
+		}
+
+		// A name in both sets is reported once, by the loop below.
+		if _, alsoMismatched := mismatched[name]; alsoMismatched {
+			continue
+		}
+
+		warnCleared(name)
+	}
+
+	for name := range mismatched {
+		warnCleared(name)
 	}
 
 	return kept
 }
 
+func warnCleared(envName string) {
+	slog.Warn("variable cleared from the environment, so the child cannot read a stale value", "env_name", envName)
+}
+
 // staleEnvNames collects the variable names a skipped secret was meant to
 // supply and nothing else did. A name another secret legitimately
-// supplied is current rather than stale, so it stays.
+// supplied is current rather than stale, so it stays. A reserved name is
+// never cleared: a secret must not supply PATH, and it must not take the
+// inherited PATH away from the child either.
 func staleEnvNames(skipped []vault.Entry, delivered map[string]string) map[string]struct{} {
 	stale := make(map[string]struct{}, len(skipped))
 
 	for _, entry := range skipped {
-		if entry.EnvName == "" || !isShellIdentifier(entry.EnvName) {
+		if !clearsWhenWithheld(entry.EnvName) {
 			continue
 		}
 

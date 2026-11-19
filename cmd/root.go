@@ -172,13 +172,18 @@ func logJSONRequested(version string, args []string) bool {
 }
 
 // resolveVaultPath applies the flag > env > XDG default precedence.
+//
+// The flag and the environment variable are cleaned here, once, so every
+// later use agrees on one spelling. The default is already clean, because
+// filepath.Join cleans it. See resolveIdentityPath for what an unclean
+// path cost.
 func (o *options) resolveVaultPath() (string, error) {
 	if o.vaultPath != "" {
-		return o.vaultPath, nil
+		return filepath.Clean(o.vaultPath), nil
 	}
 
 	if fromEnv := os.Getenv(envVault); fromEnv != "" {
-		return fromEnv, nil
+		return filepath.Clean(fromEnv), nil
 	}
 
 	base := os.Getenv("XDG_DATA_HOME")
@@ -195,13 +200,21 @@ func (o *options) resolveVaultPath() (string, error) {
 }
 
 // resolveIdentityPath applies the flag > env > XDG default precedence.
+//
+// The flag and the environment variable are cleaned here, once. The Go
+// runtime cleans a path before it opens a file, and rename hands the raw
+// spelling to the kernel, which resolves "absent/.." literally and fails
+// when absent does not exist. A raw path therefore let rekey load the
+// identity, commit the vault to the new key, and then fail the identity
+// swap, which left the vault unreadable. One clean spelling keeps the
+// load, the staging, and the swap on the same file.
 func (o *options) resolveIdentityPath() (string, error) {
 	if o.identityPath != "" {
-		return o.identityPath, nil
+		return filepath.Clean(o.identityPath), nil
 	}
 
 	if fromEnv := os.Getenv(envIdentity); fromEnv != "" {
-		return fromEnv, nil
+		return filepath.Clean(fromEnv), nil
 	}
 
 	base := os.Getenv("XDG_CONFIG_HOME")

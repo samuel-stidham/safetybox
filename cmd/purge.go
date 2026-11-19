@@ -26,7 +26,7 @@ func newPurgeCmd(opts *options) *cobra.Command {
 			"versions destroyed. The values are gone forever. Rows and " +
 			"history remain, so the secret name stays readable in the " +
 			"vault forever, even after purge. It requires --yes.",
-		Args: cobra.ExactArgs(1),
+		Args: exactArgs(1),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
 			if !yes {
 				return errors.New("purge destroys envelopes forever: re-run with --yes to confirm")

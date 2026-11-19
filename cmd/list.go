@@ -19,7 +19,7 @@ func newListCmd(opts *options) *cobra.Command {
 		Short: "List secrets, optionally under a name prefix",
 		Long: "list prints metadata for every non-deleted secret. Names are " +
 			"plaintext columns in the MVP, so no identity is needed.",
-		Args: cobra.MaximumNArgs(1),
+		Args: argCount(0, 1),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {
 			prefix := ""
 			if len(args) == 1 {
